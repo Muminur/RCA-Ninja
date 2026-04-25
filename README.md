@@ -31,7 +31,7 @@ claude-rca recent 5
 
 ## What It Does
 
-Engineers fix bugs and lose the *reasoning* behind the fix. Commit messages capture *what* changed; RCAs capture *why it broke* and *what to watch for*.
+Engineers fix bugs and lose the _reasoning_ behind the fix. Commit messages capture _what_ changed; RCAs capture _why it broke_ and _what to watch for_.
 
 `claude-rca` removes the friction by:
 
@@ -41,15 +41,15 @@ Engineers fix bugs and lose the *reasoning* behind the fix. Commit messages capt
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `claude-rca init` | Scaffold `rca/` directory and config |
-| `claude-rca generate` | Generate an RCA for a commit |
-| `claude-rca search <query>` | Search RCA corpus via ripgrep |
-| `claude-rca recent [N]` | List N most recent RCAs |
-| `claude-rca show <id>` | Display an RCA |
-| `claude-rca config` | Read/write configuration |
-| `claude-rca doctor` | Check environment health |
+| Command                     | Description                          |
+| --------------------------- | ------------------------------------ |
+| `claude-rca init`           | Scaffold `rca/` directory and config |
+| `claude-rca generate`       | Generate an RCA for a commit         |
+| `claude-rca search <query>` | Search RCA corpus via ripgrep        |
+| `claude-rca recent [N]`     | List N most recent RCAs              |
+| `claude-rca show <id>`      | Display an RCA                       |
+| `claude-rca config`         | Read/write configuration             |
+| `claude-rca doctor`         | Check environment health             |
 
 ## Privacy
 

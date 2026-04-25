@@ -43,11 +43,11 @@ const noBareErrorRule = {
   create(context) {
     return {
       ThrowStatement(node) {
-        if (
-          node.argument &&
-          node.argument.type === 'NewExpression' &&
-          node.argument.callee.name === 'Error'
-        ) {
+        if (!node.argument) return;
+        const arg = node.argument;
+        const isNewError = arg.type === 'NewExpression' && arg.callee.name === 'Error';
+        const isCallError = arg.type === 'CallExpression' && arg.callee.name === 'Error';
+        if (isNewError || isCallError) {
           context.report({ node, messageId: 'noBareError' });
         }
       },
@@ -79,6 +79,7 @@ export default [
         clearTimeout: 'readonly',
         setInterval: 'readonly',
         clearInterval: 'readonly',
+        Buffer: 'readonly',
       },
     },
     rules: {

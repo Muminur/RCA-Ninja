@@ -46,6 +46,22 @@ describe('cli', () => {
     assert.strictEqual(out, pkg.version);
   });
 
+  it('stub commands exit 1 with not-implemented message', () => {
+    const stubs = ['init', 'generate', 'config', 'doctor'];
+    for (const cmd of stubs) {
+      try {
+        execFileSync('node', [BIN, cmd], { encoding: 'utf8', cwd: ROOT });
+        assert.fail(`${cmd} should have exited non-zero`);
+      } catch (err) {
+        assert.strictEqual(err.status, 1, `${cmd} should exit 1`);
+        assert.ok(
+          err.stderr.includes('Not yet implemented'),
+          `${cmd} stderr should say "Not yet implemented"`,
+        );
+      }
+    }
+  });
+
   it('lists future commands as stubs in help', () => {
     const out = execFileSync('node', [BIN, 'help'], {
       encoding: 'utf8',

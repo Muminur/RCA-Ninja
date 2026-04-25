@@ -34,17 +34,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Lint
-        run: npx eslint 'src/**/*.mjs' 'test/**/*.mjs' 'bin/claude-rca'
-
-      - name: Prettier check
-        run: npx prettier --check '**/*.{mjs,json}'
-
-      - name: Unit tests
-        run: node --test --test-reporter=spec 'test/unit/**/*.test.mjs'
-
-      - name: Coverage gate
-        run: npx c8 --include 'src/**/*.mjs' --check-coverage --lines 85 node --test 'test/unit/**/*.test.mjs'
+      - name: Check (lint + test + coverage)
+        run: npm run check
 
       - name: Grep gate - no child_process.exec
         run: "! git grep -nE 'child_process\\.exec\\(' -- 'src/**' || (echo 'FAIL: child_process.exec found in src/' && exit 1)"
