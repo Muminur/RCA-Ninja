@@ -1,0 +1,28 @@
+node_modules/
+rca/
+coverage/
+*.tmp
+*.log
+.env
+.env.local
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Session/tool files
+CLAUDE_CODE_SESSION_PROMPT.md
+.omc/
+.mcp.json
+.serena/
+
+# Planning/process docs (tracked locally, not pushed)
+CLAUDE.md
+PLANNING.md
+TASKS.md
+RCA_PRD.md
+docs/**/*.md
+prompts/*.md
+.claude/agents/*.md
+.claude/commands/*.md
