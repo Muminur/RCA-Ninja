@@ -10,15 +10,16 @@
     "claude-rca": "./bin/claude-rca"
   },
   "scripts": {
-    "test": "node --test 'test/unit/**/*.test.mjs'",
-    "test:unit": "node --test 'test/unit/**/*.test.mjs'",
-    "test:integration": "node --test 'test/integration/**/*.test.mjs'",
-    "test:e2e": "node --test 'test/e2e/**/*.test.mjs'",
-    "test:watch": "node --test --watch 'test/unit/**/*.test.mjs'",
-    "lint": "eslint 'src/**/*.mjs' 'test/**/*.mjs' 'bin/claude-rca' && prettier --check '**/*.{mjs,json,md}'",
-    "format": "prettier --write '**/*.{mjs,json,md}'",
-    "coverage": "c8 --include 'src/**/*.mjs' --reporter text --reporter html node --test 'test/unit/**/*.test.mjs' 'test/integration/**/*.test.mjs'",
-    "check": "npm run lint && npm test && c8 --include 'src/**/*.mjs' --check-coverage --lines 85 node --test 'test/unit/**/*.test.mjs'",
+    "test": "node --test \"test/unit/**/*.test.mjs\"",
+    "test:unit": "node --test \"test/unit/**/*.test.mjs\"",
+    "test:integration": "node --test \"test/integration/**/*.test.mjs\"",
+    "test:e2e": "node --test \"test/e2e/**/*.test.mjs\"",
+    "test:watch": "node --test --watch \"test/unit/**/*.test.mjs\"",
+    "lint": "eslint \"src/**/*.mjs\" \"test/**/*.mjs\" bin/claude-rca && prettier --check \"**/*.{mjs,json,md}\"",
+    "format": "prettier --write \"**/*.{mjs,json,md}\"",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "coverage": "c8 --include \"src/**/*.mjs\" --reporter text --reporter html node --test \"test/unit/**/*.test.mjs\" \"test/integration/**/*.test.mjs\"",
+    "check": "npm run lint && npm run typecheck && npm test && c8 --include \"src/**/*.mjs\" --check-coverage --lines 85 node --test \"test/unit/**/*.test.mjs\"",
     "prepublishOnly": "npm run check"
   },
   "keywords": [
@@ -45,6 +46,7 @@
     "@eslint/js": "^10.0.1",
     "c8": "^11.0.0",
     "eslint": "^10.2.1",
-    "prettier": "^3.8.3"
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3"
   }
 }
