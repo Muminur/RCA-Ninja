@@ -8,6 +8,7 @@ import { buildContext } from './context.mjs';
 import { generate, scanForSecrets } from './generator.mjs';
 import { renderRca } from './renderer.mjs';
 import { writeRca, computeRcaPath } from './writer.mjs';
+import { search, recent, show } from './search.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -116,26 +117,77 @@ function createProgram() {
     .option('--since <date>', 'Filter by date')
     .option('--tag <tag>', 'Filter by tag')
     .option('--json', 'Output as JSON')
-    .action(() => {
-      process.stderr.write('Not yet implemented (milestone 7)\n');
-      process.exit(1);
+    .action(async (query, opts) => {
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        const results = await search({
+          outputDir: cfg.output_dir,
+          query,
+          tag: opts.tag,
+          since: opts.since,
+          json: opts.json,
+        });
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(results, null, 2) + '\n');
+        } else if (results.length === 0) {
+          process.exit(1);
+        } else {
+          for (const r of results) {
+            process.stdout.write(`${r.path}:${r.line}:${r.text}\n`);
+          }
+        }
+      } catch (err) {
+        if (err instanceof RcaError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
     });
 
   program
     .command('recent [count]')
     .description('List most recent RCAs')
     .option('--json', 'Output as JSON')
-    .action(() => {
-      process.stderr.write('Not yet implemented (milestone 7)\n');
-      process.exit(1);
+    .action((count, opts) => {
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        const n = count ? parseInt(count, 10) : 10;
+        const results = recent({ outputDir: cfg.output_dir, count: n, json: opts.json });
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(results, null, 2) + '\n');
+        } else {
+          for (const r of results) {
+            process.stdout.write(`${r.basename}  ${r.mtime}\n`);
+          }
+        }
+      } catch (err) {
+        if (err instanceof RcaError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
     });
 
   program
     .command('show <id>')
     .description('Display an RCA by ID or path')
-    .action(() => {
-      process.stderr.write('Not yet implemented (milestone 7)\n');
-      process.exit(1);
+    .action((id) => {
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        const content = show({ outputDir: cfg.output_dir, id });
+        process.stdout.write(content);
+      } catch (err) {
+        if (err instanceof RcaError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
     });
 
   program
