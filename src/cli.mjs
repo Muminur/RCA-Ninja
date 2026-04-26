@@ -4,6 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { initProject, loadConfig, getConfigValue, setConfigValue } from './config.mjs';
 import { RcaError } from './errors.mjs';
+import { buildContext } from './context.mjs';
+import { generate, scanForSecrets } from './generator.mjs';
+import { renderRca } from './renderer.mjs';
+import { writeRca, computeRcaPath } from './writer.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -55,9 +59,55 @@ function createProgram() {
     .option('--dry-run', 'Print what would be generated without writing')
     .option('--no-obsidian', 'Skip Obsidian sync')
     .option('--no-secret-scan', 'Skip secret scanning of diff')
-    .action(() => {
-      process.stderr.write('Not yet implemented (milestone 6)\n');
-      process.exit(1);
+    .action(async (opts) => {
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const configPath = program.opts().config;
+        const cfg = loadConfig({ cwd, configPath });
+
+        const context = await buildContext({ cwd, ref: opts.from });
+
+        if (!opts.secretScan && scanForSecrets(context.diff)) {
+          throw new RcaError('INTERNAL', {
+            message: 'Diff may contain secrets. Use --no-secret-scan to bypass.',
+          });
+        }
+
+        const systemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
+        const schemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
+
+        if (opts.dryRun) {
+          const date = context.timestamp_utc.slice(0, 10);
+          const p = computeRcaPath({
+            outputDir: cfg.output_dir,
+            date,
+            shortHash: context.short_hash,
+            title: 'dry-run-placeholder',
+          });
+          process.stdout.write(p + '\n');
+          return;
+        }
+
+        const { rca } = await generate({ context, config: cfg, systemPromptPath, schemaPath });
+        const md = renderRca(rca, context);
+        const date = context.timestamp_utc.slice(0, 10);
+
+        const { path: writtenPath } = await writeRca({
+          outputDir: cfg.output_dir,
+          content: md,
+          date,
+          shortHash: context.short_hash,
+          title: rca.title,
+        });
+
+        process.stdout.write(writtenPath + '\n');
+      } catch (err) {
+        if (err instanceof RcaError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
     });
 
   program
