@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import matter from 'gray-matter';
 import { renderRca } from '../../src/renderer.mjs';
 
+const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const __dirname_fixtures = join(__dirname, '..', 'fixtures');
 const fixture = JSON.parse(
   readFileSync(join(__dirname, '..', 'fixtures', 'canonical-rca.json'), 'utf8'),
 );
@@ -79,5 +82,43 @@ describe('renderer', () => {
     const parsed = matter(md);
     assert.ok(parsed.data.generated_by.startsWith('claude-rca/'));
     assert.strictEqual(parsed.data.schema, 'claude-rca.rca.v1');
+  });
+
+  it('fuzz: 50 random valid-per-schema inputs all render and re-parse to matching frontmatter', () => {
+    const matterLib = require('gray-matter');
+    const confidences = ['low', 'medium', 'high'];
+    for (let i = 0; i < 50; i++) {
+      const rca = {
+        title: `Fuzz RCA title number ${i} for testing only abcdefgh`,
+        symptom: `Symptom description number ${i}`,
+        root_cause: `Root cause number ${i}`,
+        fix: `Fix applied for case ${i}`,
+        impact: `Impact description ${i}`,
+        references: [`src/file${i}.js`],
+        files: [`src/file${i}.js`],
+        tags: ['rca', 'bugfix'],
+        confidence: confidences[i % 3],
+      };
+      const ctx = {
+        short_hash: 'abc' + String(i).padStart(4, '0'),
+        branch: 'main',
+        timestamp_utc: `2026-0${(i % 9) + 1}-01T00:00:00Z`,
+      };
+      const md = renderRca(rca, ctx);
+      assert.ok(typeof md === 'string', `fuzz[${i}]: renderRca must return string`);
+      assert.ok(md.startsWith('---\n'), `fuzz[${i}]: must start with YAML frontmatter`);
+      const parsed = matterLib(md);
+      assert.strictEqual(parsed.data.title, rca.title, `fuzz[${i}]: title must round-trip`);
+      assert.strictEqual(parsed.data.confidence, rca.confidence, `fuzz[${i}]: confidence must round-trip`);
+    }
+  });
+
+  it('snapshot: renderRca(canonical-fixture) matches test/fixtures/canonical-rca.md', () => {
+    const { readFileSync: rfs } = require('node:fs');
+    const rca = JSON.parse(rfs(join(__dirname_fixtures, 'canonical-rca.json'), 'utf8'));
+    const ctx = { short_hash: 'a3f2c1d', branch: 'main', timestamp_utc: '2026-04-25T12:00:00Z' };
+    const md = renderRca(rca, ctx);
+    const snapshot = rfs(join(__dirname_fixtures, 'canonical-rca.md'), 'utf8');
+    assert.strictEqual(md, snapshot, 'Rendered RCA must match snapshot file');
   });
 });
