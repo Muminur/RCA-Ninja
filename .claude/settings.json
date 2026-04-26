@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --test*)",
+      "Bash(npm test*)",
+      "Bash(npm run test*)",
+      "Bash(npm run lint*)",
+      "Bash(npm run check*)",
+      "Bash(npm run coverage*)",
+      "Bash(npm run typecheck*)",
+      "Bash(npm ci*)",
+      "Bash(npm install*)",
+      "Bash(node bin/claude-rca*)",
+      "Bash(claude-rca*)",
+      "Bash(rg *)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git status*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git init*)",
+      "Bash(git config*)",
+      "Bash(git rev-parse*)",
+      "Bash(git show*)",
+      "Bash(git checkout*)",
+      "Bash(git switch*)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(wc *)",
+      "Read(*)"
+    ]
+  }
+}
