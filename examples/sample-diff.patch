@@ -1,0 +1,16 @@
+diff --git a/src/middleware/auth.js b/src/middleware/auth.js
+index a1b2c3d..e4f5a6b 100644
+--- a/src/middleware/auth.js
++++ b/src/middleware/auth.js
+@@ -10,7 +10,12 @@ const Session = require('../lib/session');
+
+ module.exports = function requireAuth(req, res, next) {
+   const session = req.session;
+-  const userId = session.user.id;
++  if (!session || !session.user) {
++    return res.status(401).json({ error: 'Unauthenticated' });
++  }
++  const userId = session.user.id;
+   req.userId = userId;
+   next();
+ };

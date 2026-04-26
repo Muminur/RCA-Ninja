@@ -26,3 +26,9 @@ docs/**/*.md
 prompts/*.md
 .claude/agents/*.md
 .claude/commands/*.md
+
+# Local-only docs (tracked locally, not pushed)
+docs/architecture.md
+docs/prompts.md
+docs/troubleshooting.md
+examples/sample-rca.md

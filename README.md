@@ -1,83 +1,130 @@
 # claude-rca
 
-Local-first CLI that turns bug-fix commits into structured Root Cause Analysis Markdown artifacts.
+> Turn bug-fix commits into structured Root Cause Analysis Markdown artifacts in under 30 seconds.
+
+A **local-first CLI** that wraps `claude --bare -p` to produce validated, searchable RCA documents from `git diff` output, with optional Obsidian vault sync.
 
 ## Quick Start
 
+### Prerequisites
+
+- **Node.js >= 20 LTS**
+- **Claude Code CLI**: `npm i -g @anthropic-ai/claude-code` then `claude login`
+- **ripgrep**: `brew install ripgrep` (macOS) · `sudo apt install ripgrep` (Linux)
+- **git >= 2.20**
+
+### Install
+
 ```bash
-# Prerequisites
-node --version   # >= 20
-git --version    # >= 2.20
-rg --version     # >= 13 (ripgrep)
-claude --version # Anthropic CLI
-
-# Install
 npm install -g claude-rca
-
-# Initialize in your repo
-cd your-project
-claude-rca init
-
-# Generate an RCA after a bug-fix commit
-git commit -am "fix: null-check session before reading user.id"
-claude-rca generate
-
-# Search your RCA corpus
-claude-rca search "null pointer"
-
-# List recent RCAs
-claude-rca recent 5
 ```
 
-## What It Does
+Or run from source:
 
-Engineers fix bugs and lose the _reasoning_ behind the fix. Commit messages capture _what_ changed; RCAs capture _why it broke_ and _what to watch for_.
+```bash
+git clone <repo-url>
+cd claude-rca
+npm ci
+npm link
+```
 
-`claude-rca` removes the friction by:
+### Initialize in your repo
 
-- Generating the RCA from existing context (diff + commit + logs)
-- Enforcing a fixed schema so the corpus stays searchable
-- Storing artifacts where `rg` can find them in <2s across 10k files
-- Optionally syncing to an Obsidian vault
+```bash
+cd your-git-repo
+claude-rca init
+# Creates .claude-rca.json and rca/ directory
+```
 
-## Commands
+### Generate an RCA for the last commit
 
-| Command                                 | Description                          |
-| --------------------------------------- | ------------------------------------ |
-| `claude-rca init`                       | Scaffold `rca/` directory and config |
-| `claude-rca generate [--from REF]`      | Generate an RCA for a commit         |
-| `claude-rca generate --dry-run`         | Preview without writing              |
-| `claude-rca search <query> [--tag T]`   | Search RCA corpus via ripgrep        |
-| `claude-rca recent [N] [--json]`        | List N most recent RCAs              |
-| `claude-rca show <id>`                  | Display an RCA by ID, hash, or path  |
-| `claude-rca config --list`              | Show merged configuration            |
-| `claude-rca config --get <key>`         | Get a config value                   |
-| `claude-rca config --set <key>=<value>` | Set a config value                   |
-| `claude-rca doctor`                     | Check environment health             |
+```bash
+git commit -m "fix: null-check session before dereferencing user.id"
+claude-rca generate
+# Outputs: rca/2026/04/RCA-2026-04-26-a3f2c1d-null-check-session.md
+```
 
-## Git Hook (Optional)
+### Search your RCA corpus
 
-Auto-generate RCAs on `fix:` commits:
+```bash
+claude-rca search "null pointer"
+claude-rca recent 5
+claude-rca show RCA-2026-04-26-a3f2c1d-null-check-session
+```
+
+### Verify your environment
+
+```bash
+claude-rca doctor
+```
+
+## Configuration
+
+`claude-rca init` creates `.claude-rca.json`:
+
+```json
+{
+  "version": 1,
+  "output_dir": "./rca",
+  "claude": {
+    "binary": "claude",
+    "permission_mode": "plan",
+    "allowed_tools": "Read",
+    "timeout_ms": 60000
+  },
+  "obsidian": {
+    "enabled": false,
+    "vault_path": "",
+    "rca_folder": "RCA Inbox"
+  }
+}
+```
+
+Read/write values:
+
+```bash
+claude-rca config --get output_dir
+claude-rca config --set output_dir=./postmortems
+claude-rca config --list
+```
+
+## Optional: Auto-generate on every bug-fix commit
 
 ```bash
 bash hooks/install-hook.sh
 claude-rca config --set auto_generate=true
 ```
 
-The hook runs in the background and never blocks commits.
+The hook triggers only on commits whose message starts with `fix:` (Conventional Commits).
 
-## Obsidian Integration
+## Optional: Obsidian vault sync
 
 ```bash
 claude-rca config --set obsidian.enabled=true
 claude-rca config --set obsidian.vault_path=/path/to/vault
 ```
 
-RCAs are copied to `<vault>/RCA Inbox/` and optionally linked in your daily note.
+Every generated RCA is atomically copied to `<vault>/RCA Inbox/`. The `.obsidian/` directory is never modified.
 
-## Privacy
+## Claude Code slash commands
 
-Diffs are sent to Claude for analysis. This is the same privacy posture as Claude Code itself. No additional network calls are made. No telemetry. No accounts.
+In any Claude Code session:
+
+- `/rca` — dispatcher
+- `/rca-generate [ref]` — generate for a commit
+- `/rca-search <query>` — search corpus
+- `/rca-recent [n]` — list newest
+- `/rca-show <id>` — display by ID or path
+
+## Development
+
+```bash
+npm test                  # unit tests
+npm run test:integration  # integration tests (requires rg)
+npm run test:e2e          # e2e tests (uses claude-stub)
+npm run coverage          # c8 report (target >=85%)
+npm run check             # lint + typecheck + test + coverage (CI gate)
+```
 
 ## License
 
