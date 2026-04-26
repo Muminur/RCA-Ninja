@@ -282,9 +282,9 @@
 - [x] [D] `docs/prompts.md` — rationale for each line in `prompts/rca-system.md`; how to evolve the schema (with versioning policy) (90aae4b)
 - [x] [D] `docs/troubleshooting.md` — common errors mapped to exit codes; how to uninstall the hook (90aae4b)
 - [x] [D] `examples/sample-diff.patch`, `examples/sample-rca.md`, `examples/sample-config.json` (90aae4b)
-- [ ] [I] `npm pack` produces tarball <500 KB; verify with `tar -tzf`
+- [x] [I] `npm pack` produces tarball <500 KB; verify with `tar -tzf` (4b6c676) — 15.2 kB packed, 48.6 kB unpacked, 20 files
 - [x] [I] Add `prepublishOnly` script that runs `npm run check` (dbdd7d1)
-- [ ] [I] Tag `v0.1.0`, write release notes
+- [x] [I] Tag `v0.1.0`, write release notes (v0.1.0)
 - [ ] [R] Self-review as `code-reviewer` on the README's Quick Start by running it in a clean container/VM
 
 **Acceptance:** All `README.md` Quick Start commands succeed on a fresh clone. `npm run check` exits 0. `npm pack` succeeds. Tag created.
@@ -293,10 +293,10 @@
 
 ## Cross-cutting tasks (run continuously)
 
-- [ ] [T] Coverage gate ≥85% line coverage on `src/` enforced by `c8` in `npm run check`
-- [ ] [T] CI grep: `! git grep -nE "child_process\\.exec\\(" -- 'src/**'`
-- [ ] [T] CI grep: `! git grep -nE "throw new Error\\(" -- 'src/**'` (force `RcaError`)
-- [ ] [T] CI: lint + format check + test on macOS-latest and ubuntu-latest, Node 20
+- [x] [T] Coverage gate ≥85% line coverage on `src/` enforced by `c8` in `npm run check` (4b6c676) — 85.01%
+- [x] [T] CI grep: `! git grep -nE "child_process\\.exec\\(" -- 'src/**'` (4b6c676) — no matches
+- [x] [T] CI grep: `! git grep -nE "throw new Error\\(" -- 'src/**'` (force `RcaError`) (4b6c676) — no matches
+- [x] [T] CI: lint + format check + test on macOS-latest and ubuntu-latest, Node 20 (ci.yml — .github/workflows/ci.yml)
 - [ ] [D] Every commit message that does not match Conventional Commits is rejected by a `commit-msg` hook (consider for M11)
 - [ ] [R] Every milestone's review step runs `code-reviewer` subagent; findings land as sub-bullets here before checking off
 
