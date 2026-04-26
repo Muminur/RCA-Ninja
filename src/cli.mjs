@@ -233,9 +233,53 @@ function createProgram() {
   program
     .command('doctor')
     .description('Check environment: Node, claude, rg, git, vault')
-    .action(() => {
-      process.stderr.write('Not yet implemented (milestone 10)\n');
-      process.exit(1);
+    .action(async () => {
+      const { execFileSync: execSync } = await import('node:child_process');
+      const checks = [];
+      let failures = 0;
+
+      function check(name, fn) {
+        try {
+          const detail = fn();
+          checks.push({ name, status: 'ok', detail });
+        } catch (err) {
+          failures++;
+          checks.push({ name, status: 'FAIL', detail: err.message || String(err) });
+        }
+      }
+
+      check('node', () => {
+        const ver = process.version;
+        const major = parseInt(ver.slice(1), 10);
+        if (major < 20) {
+          throw new RcaError('DOCTOR_UNHEALTHY', { n: 1 });
+        }
+        return ver;
+      });
+
+      check('git', () => {
+        const ver = execSync('git', ['--version'], { encoding: 'utf8' }).trim();
+        return ver;
+      });
+
+      check('rg', () => {
+        const ver = execSync('rg', ['--version'], { encoding: 'utf8' }).trim().split('\n')[0];
+        return ver;
+      });
+
+      check('claude', () => {
+        const ver = execSync('claude', ['--version'], { encoding: 'utf8' }).trim();
+        return ver;
+      });
+
+      const maxName = Math.max(...checks.map((c) => c.name.length));
+      for (const c of checks) {
+        process.stdout.write(`${c.name.padEnd(maxName + 2)}${c.status.padEnd(6)}${c.detail}\n`);
+      }
+
+      if (failures > 0) {
+        process.exit(70);
+      }
     });
 
   return program;

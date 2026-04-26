@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# claude-rca post-commit hook — generates an RCA when the commit
+# message starts with "fix:" (Conventional Commits) and the user has
+# enabled auto_generate in config.
+
+set -eu
+
+# Bail if claude-rca isn't installed.
+command -v claude-rca >/dev/null 2>&1 || exit 0
+
+# Only run if auto_generate is true.
+if ! claude-rca config --get auto_generate 2>/dev/null | grep -qx true; then
+  exit 0
+fi
+
+MSG=$(git log -1 --pretty=%s)
+case "$MSG" in
+  fix:*|fix\(*\):*)
+    # Run in background so commit returns immediately.
+    nohup claude-rca generate --from HEAD >/dev/null 2>>"$(claude-rca config --get log.file 2>/dev/null || echo /tmp/claude-rca.log)" &
+    disown 2>/dev/null || true
+    ;;
+  *)
+    exit 0
+    ;;
+esac
