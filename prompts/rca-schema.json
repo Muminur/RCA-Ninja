@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "claude-rca.rca.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "symptom", "root_cause", "fix", "impact", "files", "tags", "confidence"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 80,
+      "description": "Declarative sentence describing the bug, not the fix."
+    },
+    "symptom": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 800
+    },
+    "root_cause": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 1500
+    },
+    "fix": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 1500
+    },
+    "impact": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 800
+    },
+    "files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,30}$" },
+      "minItems": 2,
+      "maxItems": 6,
+      "uniqueItems": true
+    },
+    "references": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["high", "medium", "low", "unknown"],
+      "description": "Model's confidence that root_cause is correct given inputs."
+    }
+  }
+}

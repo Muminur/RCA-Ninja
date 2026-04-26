@@ -1,0 +1,11 @@
+{
+  "title": "Session middleware null-pointers when cookie domain mismatch occurs",
+  "symptom": "Requests intermittently returned 500 with TypeError Cannot read properties of undefined reading id when users hit /api/me shortly after the cookie domain was changed in config.",
+  "root_cause": "The session loader returned undefined when the cookie domain mismatched the request host, and the auth middleware proceeded to dereference req.session.user.id without a null check.",
+  "fix": "auth.js now treats req.session === undefined as unauthenticated and short-circuits to 401. session.js was also updated to log a warning when the cookie domain check fails so the upstream cause is observable.",
+  "impact": "All endpoints behind requireAuth. User-visible: brief 500s on /api/me, /api/orders, /api/notifications. No data loss.",
+  "files": ["src/middleware/auth.js", "src/lib/session.js"],
+  "tags": ["rca", "bugfix", "auth", "backend"],
+  "references": ["src/middleware/auth.js", "src/lib/session.js"],
+  "confidence": "high"
+}

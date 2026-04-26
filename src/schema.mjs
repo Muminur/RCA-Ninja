@@ -87,4 +87,28 @@ function collectKeys(schema, prefix = '') {
 }
 collectKeys(CONFIG_SCHEMA);
 
-export { CONFIG_SCHEMA };
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const RCA_SCHEMA = JSON.parse(
+  readFileSync(join(__dirname, '..', 'prompts', 'rca-schema.json'), 'utf8'),
+);
+
+const rcaValidate = ajv.compile(RCA_SCHEMA);
+
+export function validateRca(data) {
+  const copy = JSON.parse(JSON.stringify(data));
+  const valid = rcaValidate(copy);
+  if (valid) {
+    return { valid: true, data: copy, errors: [] };
+  }
+  const errors = rcaValidate.errors.map(
+    (e) =>
+      `${e.instancePath || '/'} ${e.message}${e.params?.allowedValue !== undefined ? ` (expected: ${e.params.allowedValue})` : ''}`,
+  );
+  return { valid: false, data: copy, errors };
+}
+
+export { CONFIG_SCHEMA, RCA_SCHEMA };
