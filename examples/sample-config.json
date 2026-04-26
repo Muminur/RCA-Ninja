@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "output_dir": "./rca",
+  "claude": {
+    "use_bare": true,
+    "permission_mode": "plan",
+    "allowed_tools": "Read",
+    "timeout_ms": 60000
+  },
+  "obsidian": {
+    "enabled": true,
+    "vault_path": "/Users/dev/my-vault",
+    "target_folder": "RCA Inbox",
+    "update_daily_note": true
+  }
+}
