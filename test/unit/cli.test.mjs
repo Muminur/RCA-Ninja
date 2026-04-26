@@ -47,7 +47,7 @@ describe('cli', () => {
   });
 
   it('stub commands exit 1 with not-implemented message', () => {
-    const stubs = ['init', 'generate', 'config', 'doctor'];
+    const stubs = ['generate', 'doctor'];
     for (const cmd of stubs) {
       try {
         execFileSync('node', [BIN, cmd], { encoding: 'utf8', cwd: ROOT });
