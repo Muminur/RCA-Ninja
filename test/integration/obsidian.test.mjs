@@ -1,7 +1,11 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+const require = createRequire(import.meta.url);
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 import { tmpdir } from 'node:os';
 import {
   detectVault,
@@ -126,5 +130,30 @@ describe('obsidian', () => {
     assert.ok(uri.startsWith('obsidian://open?'));
     assert.ok(uri.includes('vault=my-vault'));
     assert.ok(uri.includes('file='));
+  });
+
+  it('proxy guard: syncToVault never writes to .obsidian/ path', async () => {
+    const vault = createVault(tmp);
+    const rca = createRca(tmp);
+    const dest = await syncToVault({ rcaPath: rca, vaultPath: vault });
+    const normalDest = dest.replace(/\\/g, '/');
+    assert.ok(
+      !normalDest.includes('/.obsidian/'),
+      `syncToVault must not write into .obsidian/ — got: ${dest}`,
+    );
+    assert.ok(normalDest.includes('/RCA Inbox/'), `dest must be in RCA Inbox, got: ${dest}`);
+  });
+
+  it('proxy guard: obsidian.mjs source never calls atomicWrite or appendFileSync with a .obsidian path', () => {
+    const { readFileSync: rfs } = require('node:fs');
+    const src = rfs(join(ROOT, 'src', 'obsidian.mjs'), 'utf8');
+    assert.ok(
+      !/atomicWrite\s*\([^)]*\.obsidian/.test(src),
+      'obsidian.mjs must not call atomicWrite with a .obsidian path',
+    );
+    assert.ok(
+      !/appendFileSync\s*\([^,]*\.obsidian/.test(src),
+      'obsidian.mjs must not call appendFileSync with a .obsidian path',
+    );
   });
 });
