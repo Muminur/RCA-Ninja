@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,35 +8,47 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const BIN = join(ROOT, 'bin', 'claude-rca');
 
+function isToolAvailable(cmd) {
+  try {
+    return spawnSync(cmd, ['--version'], { stdio: 'ignore' }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+const ALL_TOOLS_AVAILABLE =
+  isToolAvailable('rg') && isToolAvailable('git') && isToolAvailable('claude');
+
+function runDoctor(env = process.env) {
+  return spawnSync('node', [BIN, 'doctor'], { encoding: 'utf8', cwd: ROOT, env });
+}
+
 describe('doctor', () => {
-  it('exits 0 when git is available', () => {
-    const result = execFileSync('node', [BIN, 'doctor'], {
-      encoding: 'utf8',
-      cwd: ROOT,
-      env: { ...process.env },
-    });
-    assert.ok(result.includes('git'));
+  it('reports node version regardless of other tool availability', () => {
+    const { stdout } = runDoctor();
+    assert.ok(stdout.includes('node'), 'doctor output must report node');
   });
 
-  it('reports node version', () => {
-    const result = execFileSync('node', [BIN, 'doctor'], {
-      encoding: 'utf8',
-      cwd: ROOT,
-    });
-    assert.ok(result.includes('node'));
+  it('reports git status regardless of other tool availability', () => {
+    const { stdout } = runDoctor();
+    assert.ok(stdout.includes('git'), 'doctor output must report git');
   });
 
-  it('exits 70 when a critical tool is missing', () => {
+  it(
+    'exits 0 when all tools are present',
+    { skip: !ALL_TOOLS_AVAILABLE ? 'not all tools on PATH' : false },
+    () => {
+      const { status } = runDoctor();
+      assert.strictEqual(status, 0);
+    },
+  );
+
+  it('exits 70 when a critical tool is completely absent', () => {
     const nodeBin = process.execPath.replace(/[/\\][^/\\]+$/, '');
-    try {
-      execFileSync('node', [BIN, 'doctor'], {
-        encoding: 'utf8',
-        cwd: ROOT,
-        env: { ...process.env, PATH: nodeBin, SystemRoot: process.env.SystemRoot || '' },
-      });
-      assert.fail('Should have exited non-zero with minimal PATH');
-    } catch (err) {
-      assert.strictEqual(err.status, 70);
-    }
+    const { status } = runDoctor({
+      PATH: nodeBin,
+      SystemRoot: process.env.SystemRoot || '',
+    });
+    assert.strictEqual(status, 70);
   });
 });

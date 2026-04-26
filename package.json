@@ -19,7 +19,7 @@
     "format": "prettier --write \"**/*.{mjs,json,md}\"",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "coverage": "c8 --include \"src/**/*.mjs\" --reporter text --reporter html node --test \"test/unit/**/*.test.mjs\" \"test/integration/**/*.test.mjs\"",
-    "check": "npm run lint && npm run typecheck && npm test && c8 --include \"src/**/*.mjs\" --check-coverage --lines 85 node --test \"test/unit/**/*.test.mjs\"",
+    "check": "npm run lint && npm run typecheck && c8 --include \"src/**/*.mjs\" --check-coverage --lines 85 node --test \"test/unit/**/*.test.mjs\" \"test/integration/**/*.test.mjs\" \"test/e2e/**/*.test.mjs\"",
     "prepublishOnly": "npm run check"
   },
   "keywords": [

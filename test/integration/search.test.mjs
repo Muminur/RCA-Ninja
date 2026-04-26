@@ -3,7 +3,22 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { search, recent, show } from '../../src/search.mjs';
+
+function isRgAvailable() {
+  try {
+    execFileSync('rg', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const RG_AVAILABLE = isRgAvailable();
+const skipIfNoRg = RG_AVAILABLE
+  ? {}
+  : { skip: 'rg not on PATH — install ripgrep to run search tests' };
 
 function createFixtures(dir, count) {
   for (let i = 0; i < count; i++) {
@@ -28,7 +43,7 @@ describe('search', () => {
     createFixtures(tmp, 50);
   });
 
-  it('finds hits for a query', async () => {
+  it('finds hits for a query', skipIfNoRg, async () => {
     const results = await search({ outputDir: tmp, query: 'search-target' });
     assert.ok(results.length > 0);
     assert.ok(results[0].path);
@@ -36,17 +51,17 @@ describe('search', () => {
     assert.ok(results[0].text.includes('search-target'));
   });
 
-  it('returns empty for no matches', async () => {
+  it('returns empty for no matches', skipIfNoRg, async () => {
     const results = await search({ outputDir: tmp, query: 'zzz-nonexistent-zzz' });
     assert.strictEqual(results.length, 0);
   });
 
-  it('filters by tag', async () => {
+  it('filters by tag', skipIfNoRg, async () => {
     const results = await search({ outputDir: tmp, query: 'Symptom', tag: 'auth' });
     assert.ok(results.length > 0);
   });
 
-  it('returns JSON format', async () => {
+  it('returns JSON format', skipIfNoRg, async () => {
     const results = await search({ outputDir: tmp, query: 'search-target', json: true });
     assert.ok(Array.isArray(results));
     if (results.length > 0) {

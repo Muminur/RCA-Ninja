@@ -2,3 +2,5 @@ node_modules/
 coverage/
 rca/
 package-lock.json
+test/fixtures/canonical-rca.md
+examples/sample-rca.md
