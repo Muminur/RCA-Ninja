@@ -51,7 +51,10 @@ describe('subagents', () => {
     for (const file of readdirSync(AGENTS_DIR).filter((f) => f.endsWith('.md'))) {
       const { fm } = parseAgentFile(join(AGENTS_DIR, file));
       if (!fm.model) continue;
-      assert.ok(VALID_MODELS.has(fm.model), `${file}: model '${fm.model}' must be sonnet/haiku/opus`);
+      assert.ok(
+        VALID_MODELS.has(fm.model),
+        `${file}: model '${fm.model}' must be sonnet/haiku/opus`,
+      );
     }
   });
 
@@ -64,7 +67,10 @@ describe('subagents', () => {
   it('all agent bodies are non-trivial (>50 chars)', () => {
     for (const file of readdirSync(AGENTS_DIR).filter((f) => f.endsWith('.md'))) {
       const { body } = parseAgentFile(join(AGENTS_DIR, file));
-      assert.ok(body.trim().length > 50, `${file}: body must be >50 chars, got ${body.trim().length}`);
+      assert.ok(
+        body.trim().length > 50,
+        `${file}: body must be >50 chars, got ${body.trim().length}`,
+      );
     }
   });
 });

@@ -81,7 +81,11 @@ describe('hooks', () => {
   it('post-commit hook bails silently when claude-rca not on PATH', () => {
     const hookDest = join(tmp, '.git', 'hooks', 'post-commit');
     copyFileSync(POST_COMMIT, hookDest);
-    try { chmodSync(hookDest, 0o755); } catch { /* windows — skip chmod */ }
+    try {
+      chmodSync(hookDest, 0o755);
+    } catch {
+      /* windows — skip chmod */
+    }
 
     const minPath = process.execPath.replace(/[/\\][^/\\]+$/, '');
     // This commit must NOT throw (hook must exit 0 silently when claude-rca missing)

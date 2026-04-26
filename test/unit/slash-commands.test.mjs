@@ -76,10 +76,7 @@ describe('slash commands', () => {
     const files = readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.md'));
     for (const file of files) {
       const { body } = parseCommandFile(join(COMMANDS_DIR, file));
-      assert.ok(
-        body.includes('claude-rca'),
-        `${file}: body must reference claude-rca`,
-      );
+      assert.ok(body.includes('claude-rca'), `${file}: body must reference claude-rca`);
     }
   });
 

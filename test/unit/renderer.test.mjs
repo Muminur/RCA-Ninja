@@ -109,7 +109,11 @@ describe('renderer', () => {
       assert.ok(md.startsWith('---\n'), `fuzz[${i}]: must start with YAML frontmatter`);
       const parsed = matterLib(md);
       assert.strictEqual(parsed.data.title, rca.title, `fuzz[${i}]: title must round-trip`);
-      assert.strictEqual(parsed.data.confidence, rca.confidence, `fuzz[${i}]: confidence must round-trip`);
+      assert.strictEqual(
+        parsed.data.confidence,
+        rca.confidence,
+        `fuzz[${i}]: confidence must round-trip`,
+      );
     }
   });
 
