@@ -37,13 +37,41 @@ export function createProgram() {
 
   program
     .command('init')
-    .description('Scaffold rca/ directory and .claude-rca.json config')
-    .action(() => {
+    .description('Scaffold rca/ directory, .claude-rca.json config, and install git hooks')
+    .option('--no-hooks', 'Skip git hook installation')
+    .action(async (opts) => {
       try {
         const cwd = program.opts().cwd || process.cwd();
         const { configPath, rcaDir } = initProject(cwd);
         process.stderr.write(`✓ created ${rcaDir}\n`);
         process.stderr.write(`✓ wrote ${configPath}\n`);
+
+        if (opts.hooks !== false) {
+          const hookScript = join(__dirname, '..', 'hooks', 'install-hook.sh');
+          try {
+            const { spawnSync } = await import('node:child_process');
+            const result = spawnSync('bash', [hookScript], {
+              cwd,
+              shell: false,
+              stdio: ['ignore', 'pipe', 'pipe'],
+              timeout: 10000,
+            });
+            const out = result.stdout.toString('utf8').trim();
+            const errOut = result.stderr.toString('utf8').trim();
+            if (out) {
+              for (const line of out.split('\n')) {
+                if (line) process.stderr.write(`${line}\n`);
+              }
+            }
+            if (result.status !== 0 && !out) {
+              process.stderr.write(
+                `⚠ git hooks not installed${errOut ? ': ' + errOut : ' (not a git repo?)'}\n`,
+              );
+            }
+          } catch {
+            process.stderr.write(`⚠ git hooks not installed (bash not available)\n`);
+          }
+        }
       } catch (err) {
         if (err instanceof RcaError) {
           process.stderr.write(`${err.message}\n`);
