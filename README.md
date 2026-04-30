@@ -22,8 +22,8 @@ npm install -g claude-rca
 Or run from source:
 
 ```bash
-git clone <repo-url>
-cd claude-rca
+git clone https://github.com/Muminur/RCA-Ninja.git
+cd RCA-Ninja
 npm ci
 npm link
 ```
@@ -95,7 +95,12 @@ bash hooks/install-hook.sh
 claude-rca config --set auto_generate=true
 ```
 
-The hook triggers only on commits whose message starts with `fix:` (Conventional Commits).
+`install-hook.sh` installs two git hooks into your repo's `.git/hooks/`:
+
+- **`post-commit`** — detects `fix:` commits and runs `claude-rca generate` in the background (no commit delay).
+- **`commit-msg`** — rejects commit messages that do not follow [Conventional Commits](https://www.conventionalcommits.org/). Accepted types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Merge, Revert, fixup!, and squash! commits are always passed through.
+
+The installer is idempotent (safe to run multiple times) and will never overwrite a hook it did not create.
 
 ## Optional: Obsidian vault sync
 
@@ -123,8 +128,12 @@ npm test                  # unit tests
 npm run test:integration  # integration tests (requires rg)
 npm run test:e2e          # e2e tests (uses claude-stub)
 npm run coverage          # c8 report (target >=85%)
-npm run check             # lint + typecheck + test + coverage (CI gate)
+npm run check             # lint + test + coverage (CI gate)
 ```
+
+203 tests across unit, integration, and e2e suites. Coverage gate: ≥85% line coverage on `src/`.
+
+CI runs on Node 20, Ubuntu and macOS, on every push and pull request (`.github/workflows/ci.yml`).
 
 ## License
 
