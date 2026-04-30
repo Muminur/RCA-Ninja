@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# claude-rca commit-msg hook — rejects commit messages that do not match
+# Conventional Commits (https://www.conventionalcommits.org/).
+#
+# Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci,
+# chore, revert. Optional scope in parens. Optional ! to mark a breaking
+# change. Subject must be non-empty.
+#
+# Skipped (always pass):
+#   - Merge commits         (start with "Merge ")
+#   - Revert commits        (start with "Revert ")
+#   - Fixup/squash commits  (start with "fixup!" or "squash!")
+#
+# Exit 0 = accept, exit 1 = reject (git aborts the commit).
+
+set -eu
+
+MSG_FILE="${1:-}"
+if [ -z "$MSG_FILE" ] || [ ! -f "$MSG_FILE" ]; then
+  echo "commit-msg: no message file passed" >&2
+  exit 1
+fi
+
+# Read the first non-comment line as the subject.
+SUBJECT=""
+while IFS= read -r LINE || [ -n "$LINE" ]; do
+  case "$LINE" in
+    \#*) continue ;;
+    "") continue ;;
+    *) SUBJECT="$LINE"; break ;;
+  esac
+done < "$MSG_FILE"
+
+# Empty messages are invalid.
+if [ -z "$SUBJECT" ]; then
+  echo "commit-msg: empty commit message" >&2
+  echo "  Use Conventional Commits, e.g. 'feat: add X' or 'fix(scope): handle Y'." >&2
+  exit 1
+fi
+
+# Allow merge / revert / fixup / squash commits to pass without validation.
+case "$SUBJECT" in
+  "Merge "*|"Revert "*|"fixup!"*|"squash!"*)
+    exit 0
+    ;;
+esac
+
+# Conventional Commits regex:
+#   type(optional-scope)?(optional-!)?: subject
+PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: .+'
+
+if [[ "$SUBJECT" =~ $PATTERN ]]; then
+  exit 0
+fi
+
+cat >&2 <<EOF
+commit-msg: rejected — message does not match Conventional Commits.
+
+  Got:      "$SUBJECT"
+
+  Expected: <type>[optional-scope][!]: <subject>
+
+  Allowed types:
+    feat, fix, docs, style, refactor, perf,
+    test, build, ci, chore, revert
+
+  Examples:
+    feat: add login flow
+    fix(auth): handle null session
+    refactor!: drop deprecated API
+    chore: bump dependency
+
+  See https://www.conventionalcommits.org/
+EOF
+exit 1

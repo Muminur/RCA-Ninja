@@ -1,0 +1,238 @@
+import { describe, it, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  chmodSync,
+  mkdirSync,
+} from 'node:fs';
+import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { execFileSync, spawnSync } from 'node:child_process';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(__dirname, '..', '..');
+const COMMIT_MSG_HOOK = join(ROOT, 'hooks', 'commit-msg');
+const INSTALL_HOOK = join(ROOT, 'hooks', 'install-hook.sh');
+
+function isBashAvailable() {
+  try {
+    execFileSync('bash', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const BASH_AVAILABLE = isBashAvailable();
+const skipIfNoBash = BASH_AVAILABLE
+  ? {}
+  : { skip: 'bash not on PATH — required to execute commit-msg hook' };
+
+function runHook(message) {
+  // Write the message to a temp file and invoke the hook with the path,
+  // exactly as git does.
+  const msgFile = mkdtempSync(join(tmpdir(), 'commit-msg-')) + '/COMMIT_EDITMSG';
+  writeFileSync(msgFile, message);
+  const result = spawnSync('bash', [COMMIT_MSG_HOOK, msgFile], {
+    encoding: 'utf8',
+  });
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+describe('commit-msg hook — file', () => {
+  it('hooks/commit-msg file exists', () => {
+    assert.ok(existsSync(COMMIT_MSG_HOOK), 'hooks/commit-msg must exist');
+  });
+
+  it('hooks/commit-msg has bash shebang', () => {
+    const src = readFileSync(COMMIT_MSG_HOOK, 'utf8');
+    assert.ok(src.includes('#!/usr/bin/env bash'), 'commit-msg must have bash shebang');
+  });
+
+  it('install-hook.sh installs commit-msg in addition to post-commit', () => {
+    const src = readFileSync(INSTALL_HOOK, 'utf8');
+    assert.ok(src.includes('commit-msg'), 'install-hook.sh must reference commit-msg');
+  });
+});
+
+describe('commit-msg hook — Conventional Commits validation', () => {
+  it('accepts feat: prefix', skipIfNoBash, () => {
+    const r = runHook('feat: add new feature\n');
+    assert.strictEqual(r.code, 0, `expected exit 0, got ${r.code}: ${r.stderr}`);
+  });
+
+  it('accepts fix: prefix', skipIfNoBash, () => {
+    const r = runHook('fix: handle null pointer\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts test: prefix', skipIfNoBash, () => {
+    const r = runHook('test: cover edge case\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts docs: prefix', skipIfNoBash, () => {
+    const r = runHook('docs: update README\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts chore: prefix', skipIfNoBash, () => {
+    const r = runHook('chore: bump dependency\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts refactor: prefix', skipIfNoBash, () => {
+    const r = runHook('refactor: simplify config loader\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts style: prefix', skipIfNoBash, () => {
+    const r = runHook('style: prettier formatting\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts perf: prefix', skipIfNoBash, () => {
+    const r = runHook('perf: speed up search\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts ci: prefix', skipIfNoBash, () => {
+    const r = runHook('ci: add coverage gate\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts build: prefix', skipIfNoBash, () => {
+    const r = runHook('build: pin npm version\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts revert: prefix', skipIfNoBash, () => {
+    const r = runHook('revert: undo broken change\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts type with scope: feat(auth):', skipIfNoBash, () => {
+    const r = runHook('feat(auth): add login flow\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts type with breaking marker: feat!:', skipIfNoBash, () => {
+    const r = runHook('feat!: drop legacy API\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('accepts type with scope and breaking marker: feat(api)!:', skipIfNoBash, () => {
+    const r = runHook('feat(api)!: redesign endpoints\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('rejects free-form message', skipIfNoBash, () => {
+    const r = runHook('just a random message\n');
+    assert.notStrictEqual(r.code, 0);
+  });
+
+  it('rejects unknown type prefix', skipIfNoBash, () => {
+    const r = runHook('foo: not a real type\n');
+    assert.notStrictEqual(r.code, 0);
+  });
+
+  it('rejects type without colon', skipIfNoBash, () => {
+    const r = runHook('feat add a thing\n');
+    assert.notStrictEqual(r.code, 0);
+  });
+
+  it('rejects type with empty subject', skipIfNoBash, () => {
+    const r = runHook('feat: \n');
+    assert.notStrictEqual(r.code, 0);
+  });
+
+  it('skips merge commits', skipIfNoBash, () => {
+    const r = runHook("Merge branch 'feature/foo'\n");
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('skips revert commits generated by git', skipIfNoBash, () => {
+    const r = runHook('Revert "feat: something"\n\nThis reverts commit abc123.\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('skips fixup! commits', skipIfNoBash, () => {
+    const r = runHook('fixup! feat: original commit\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('skips squash! commits', skipIfNoBash, () => {
+    const r = runHook('squash! feat: original commit\n');
+    assert.strictEqual(r.code, 0);
+  });
+
+  it('rejects empty message', skipIfNoBash, () => {
+    const r = runHook('\n');
+    assert.notStrictEqual(r.code, 0);
+  });
+
+  it('error output mentions Conventional Commits', skipIfNoBash, () => {
+    const r = runHook('garbage message\n');
+    assert.ok(
+      /conventional commits/i.test(r.stderr) || /conventional commits/i.test(r.stdout),
+      'rejection message should reference Conventional Commits',
+    );
+  });
+});
+
+describe('commit-msg hook — install', () => {
+  let tmp;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'claude-rca-cm-install-'));
+    execFileSync('git', ['init'], { cwd: tmp, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: tmp, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: tmp, stdio: 'ignore' });
+    // Override any inherited core.hooksPath so tests target the local repo.
+    execFileSync('git', ['config', '--local', 'core.hooksPath', join(tmp, '.git', 'hooks')], {
+      cwd: tmp,
+      stdio: 'ignore',
+    });
+    mkdirSync(join(tmp, '.git', 'hooks'), { recursive: true });
+  });
+
+  it('install-hook.sh installs commit-msg hook', skipIfNoBash, () => {
+    const result = spawnSync('bash', [INSTALL_HOOK], {
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    assert.strictEqual(result.status, 0, `install failed: ${result.stderr}`);
+    const dest = join(tmp, '.git', 'hooks', 'commit-msg');
+    assert.ok(existsSync(dest), 'commit-msg hook must be installed');
+  });
+
+  it('install-hook.sh is idempotent for commit-msg', skipIfNoBash, () => {
+    const opts = { cwd: tmp, encoding: 'utf8' };
+    const r1 = spawnSync('bash', [INSTALL_HOOK], opts);
+    assert.strictEqual(r1.status, 0);
+    const r2 = spawnSync('bash', [INSTALL_HOOK], opts);
+    assert.strictEqual(r2.status, 0, `second install must succeed: ${r2.stderr}`);
+  });
+
+  it('install-hook.sh refuses to overwrite a non-claude-rca commit-msg hook', skipIfNoBash, () => {
+    const dest = join(tmp, '.git', 'hooks', 'commit-msg');
+    writeFileSync(dest, '#!/usr/bin/env bash\n# user-managed hook\nexit 0\n');
+    try {
+      chmodSync(dest, 0o755);
+    } catch {
+      /* windows */
+    }
+    const result = spawnSync('bash', [INSTALL_HOOK], {
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    assert.notStrictEqual(result.status, 0, 'install must refuse foreign hook');
+    // Make sure the foreign hook content is preserved
+    const after = readFileSync(dest, 'utf8');
+    assert.ok(after.includes('user-managed hook'), 'must not overwrite foreign hook');
+  });
+});
