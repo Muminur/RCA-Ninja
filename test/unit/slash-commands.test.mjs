@@ -1,12 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const COMMANDS_DIR = join(ROOT, '.claude', 'commands');
+
+const SKIP = !existsSync(COMMANDS_DIR) ? '.claude/commands/ not present (gitignored)' : false;
 
 const ALLOWED_TOOLS = new Set(['Bash', 'Read', 'Edit', 'Write']);
 
@@ -32,12 +34,12 @@ function parseSimpleYaml(yaml) {
 }
 
 describe('slash commands', () => {
-  it('commands directory exists with at least 5 command files', () => {
+  it('commands directory exists with at least 5 command files', { skip: SKIP }, () => {
     const files = readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.md'));
     assert.ok(files.length >= 5, `Expected ≥5 command files, got ${files.length}`);
   });
 
-  it('all command files have valid YAML frontmatter', () => {
+  it('all command files have valid YAML frontmatter', { skip: SKIP }, () => {
     const files = readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.md'));
     for (const file of files) {
       assert.doesNotThrow(
@@ -47,7 +49,7 @@ describe('slash commands', () => {
     }
   });
 
-  it('all command files have a description field', () => {
+  it('all command files have a description field', { skip: SKIP }, () => {
     const files = readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.md'));
     for (const file of files) {
       const { yamlContent } = parseCommandFile(join(COMMANDS_DIR, file));
@@ -56,23 +58,27 @@ describe('slash commands', () => {
     }
   });
 
-  it('all command files allowed-tools are a subset of {Bash, Read, Edit, Write}', () => {
-    const files = readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.md'));
-    for (const file of files) {
-      const { yamlContent } = parseCommandFile(join(COMMANDS_DIR, file));
-      const fm = parseSimpleYaml(yamlContent);
-      if (!fm['allowed-tools']) continue;
-      const tools = fm['allowed-tools'].split(',').map((t) => t.trim());
-      for (const tool of tools) {
-        assert.ok(
-          ALLOWED_TOOLS.has(tool),
-          `${file}: allowed-tools '${tool}' is not in {Bash, Read, Edit, Write}`,
-        );
+  it(
+    'all command files allowed-tools are a subset of {Bash, Read, Edit, Write}',
+    { skip: SKIP },
+    () => {
+      const files = readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.md'));
+      for (const file of files) {
+        const { yamlContent } = parseCommandFile(join(COMMANDS_DIR, file));
+        const fm = parseSimpleYaml(yamlContent);
+        if (!fm['allowed-tools']) continue;
+        const tools = fm['allowed-tools'].split(',').map((t) => t.trim());
+        for (const tool of tools) {
+          assert.ok(
+            ALLOWED_TOOLS.has(tool),
+            `${file}: allowed-tools '${tool}' is not in {Bash, Read, Edit, Write}`,
+          );
+        }
       }
-    }
-  });
+    },
+  );
 
-  it('each command body references claude-rca (no reimplemented logic)', () => {
+  it('each command body references claude-rca (no reimplemented logic)', { skip: SKIP }, () => {
     const files = readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.md'));
     for (const file of files) {
       const { body } = parseCommandFile(join(COMMANDS_DIR, file));
@@ -80,7 +86,7 @@ describe('slash commands', () => {
     }
   });
 
-  it('rca.md dispatcher references all four subcommands', () => {
+  it('rca.md dispatcher references all four subcommands', { skip: SKIP }, () => {
     const { body } = parseCommandFile(join(COMMANDS_DIR, 'rca.md'));
     for (const cmd of ['generate', 'search', 'recent', 'show']) {
       assert.ok(body.includes(cmd), `rca.md must reference ${cmd} subcommand`);

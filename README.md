@@ -131,9 +131,39 @@ npm run coverage          # c8 report (target >=85%)
 npm run check             # lint + test + coverage (CI gate)
 ```
 
-203 tests across unit, integration, and e2e suites. Coverage gate: ≥85% line coverage on `src/`.
+203 tests across unit, integration, and e2e suites. Current coverage: 88.17% line coverage on `src/` (gate: ≥85%).
 
 CI runs on Node 20, Ubuntu and macOS, on every push and pull request (`.github/workflows/ci.yml`).
+
+## Architecture
+
+```
+Developer → git commit → post-commit hook → claude-rca CLI
+                                                  │
+                    ┌─────────────────────────────┼──────────────────┐
+                    ▼                             ▼                  ▼
+              context.mjs                   generator.mjs       writer.mjs
+              (git diff/log)                (spawns claude       (atomic write
+                                             --bare --json)      to rca/YYYY/MM/)
+                                                  │
+                                                  ▼
+                                            renderer.mjs
+                                            (JSON → Markdown)
+                                                  │
+                                                  ▼
+                                            rca/YYYY/MM/RCA-*.md
+                                                  │ optional
+                                                  ▼
+                                            Obsidian vault sync
+```
+
+Key design decisions:
+
+- **Headless Claude**: Claude has read-only access (`--allowedTools "Read"`, `--permission-mode plan`). The wrapper writes all files.
+- **Atomic writes**: Every file write goes through tmp → fsync → rename. No partial files.
+- **Schema enforcement**: `--json-schema` at the CLI boundary. Belt-and-suspenders re-validation in Node.
+- **ripgrep for search**: No index to corrupt. Fast enough for 10k RCAs.
+- **Filesystem-only Obsidian**: Never touches `.obsidian/`. Pure file copy.
 
 ## License
 
