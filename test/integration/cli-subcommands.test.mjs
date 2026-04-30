@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createProgram } from '../../src/cli.mjs';
@@ -125,5 +125,105 @@ describe('cli subcommands (via createProgram)', () => {
       ]),
     );
     assert.ok(stderr.includes('set'), 'stderr must confirm the set operation');
+  });
+});
+
+function createObsidianFixture() {
+  const tmp = mkdtempSync(join(tmpdir(), 'claude-rca-obs-'));
+  const rcaDir = join(tmp, 'rca');
+  mkdirSync(join(rcaDir, '2026', '01'), { recursive: true });
+
+  const vault = join(tmp, 'test-vault');
+  mkdirSync(join(vault, '.obsidian'), { recursive: true });
+  mkdirSync(join(vault, 'RCA Inbox'), { recursive: true });
+  mkdirSync(join(vault, 'Daily Notes'), { recursive: true });
+
+  writeFileSync(
+    join(tmp, '.claude-rca.json'),
+    JSON.stringify({
+      version: 1,
+      output_dir: rcaDir,
+      obsidian: {
+        enabled: true,
+        vault_path: vault,
+        target_folder: 'RCA Inbox',
+        update_daily_note: true,
+        daily_notes_folder: 'Daily Notes',
+      },
+    }),
+  );
+
+  const rcaName = 'RCA-2026-01-01-abc0001-test-fix.md';
+  const rcaContent =
+    '---\ntitle: "Test fix for null pointer"\ntags: [rca, bugfix]\n---\n\n## Symptom\n\nBroken.\n';
+  writeFileSync(join(rcaDir, '2026', '01', rcaName), rcaContent);
+
+  return { tmp, rcaDir, vault, rcaName };
+}
+
+describe('obsidian sync subcommand', () => {
+  it('syncs an RCA file to the vault', async () => {
+    const { tmp, vault, rcaName } = createObsidianFixture();
+    const rcaRelPath = join('rca', '2026', '01', rcaName);
+
+    const { stderr } = await capture(() =>
+      createProgram().parseAsync(['node', 'rca', '--cwd', tmp, 'obsidian', 'sync', rcaRelPath]),
+    );
+    assert.ok(stderr.includes('synced'), 'stderr must confirm sync');
+    const dest = join(vault, 'RCA Inbox', rcaName);
+    assert.ok(existsSync(dest), 'RCA must exist in vault target folder');
+  });
+
+  it('appends a wikilink to daily note if it exists', async () => {
+    const { tmp, vault, rcaName } = createObsidianFixture();
+    const today = new Date().toISOString().slice(0, 10);
+    const dailyNotePath = join(vault, 'Daily Notes', `${today}.md`);
+    writeFileSync(dailyNotePath, '# Daily Note\n\n- something\n');
+
+    const rcaRelPath = join('rca', '2026', '01', rcaName);
+
+    await capture(() =>
+      createProgram().parseAsync(['node', 'rca', '--cwd', tmp, 'obsidian', 'sync', rcaRelPath]),
+    );
+
+    const content = readFileSync(dailyNotePath, 'utf8');
+    assert.ok(
+      content.includes('[[RCA-2026-01-01-abc0001-test-fix]]'),
+      'daily note must have wikilink',
+    );
+  });
+
+  it('--open prints an obsidian:// URI', async () => {
+    const { tmp, rcaName } = createObsidianFixture();
+    const rcaRelPath = join('rca', '2026', '01', rcaName);
+
+    const { stdout } = await capture(() =>
+      createProgram().parseAsync([
+        'node',
+        'rca',
+        '--cwd',
+        tmp,
+        'obsidian',
+        'sync',
+        rcaRelPath,
+        '--open',
+      ]),
+    );
+    assert.ok(stdout.includes('obsidian://open?vault='), 'stdout must contain obsidian URI');
+  });
+
+  it('exits with error when vault is not configured', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'claude-rca-obs-'));
+    mkdirSync(join(tmp, 'rca'), { recursive: true });
+    writeFileSync(
+      join(tmp, '.claude-rca.json'),
+      JSON.stringify({ version: 1, output_dir: './rca', obsidian: { enabled: false } }),
+    );
+    writeFileSync(join(tmp, 'rca', 'test.md'), '---\ntitle: x\n---\nhi');
+
+    const { exitCode } = await capture(() =>
+      createProgram().parseAsync(['node', 'rca', '--cwd', tmp, 'obsidian', 'sync', 'rca/test.md']),
+    );
+    assert.ok(exitCode !== null && exitCode > 0, 'must exit non-zero for NO_VAULT');
   });
 });

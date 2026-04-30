@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { initProject, loadConfig, getConfigValue, setConfigValue } from './config.mjs';
@@ -9,6 +10,7 @@ import { generate, scanForSecrets } from './generator.mjs';
 import { renderRca } from './renderer.mjs';
 import { writeRca, computeRcaPath } from './writer.mjs';
 import { search, recent, show } from './search.mjs';
+import { syncToVault, appendDailyNote, buildObsidianUri } from './obsidian.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -102,6 +104,34 @@ export function createProgram() {
         });
 
         process.stdout.write(writtenPath + '\n');
+
+        if (opts.obsidian !== false && cfg.obsidian && cfg.obsidian.enabled) {
+          try {
+            const targetFolder = cfg.obsidian.target_folder || 'RCA Inbox';
+            const vaultPath = cfg.obsidian.vault_path;
+            const rcaBasename = basename(writtenPath);
+
+            await syncToVault({ rcaPath: writtenPath, vaultPath, targetFolder });
+            process.stderr.write(`✓ synced to vault: ${targetFolder}/${rcaBasename}\n`);
+
+            if (cfg.obsidian.update_daily_note) {
+              appendDailyNote({
+                vaultPath,
+                dailyNotesFolder: cfg.obsidian.daily_notes_folder || 'Daily Notes',
+                dailyNoteFormat: cfg.obsidian.daily_note_format || 'YYYY-MM-DD',
+                rcaBasename,
+                title: rca.title,
+              });
+            }
+
+            if (cfg.obsidian.open_on_create) {
+              const uri = buildObsidianUri({ vaultPath, targetFolder, rcaBasename });
+              process.stderr.write(`✓ obsidian: ${uri}\n`);
+            }
+          } catch (obsErr) {
+            process.stderr.write(`⚠ obsidian sync failed: ${obsErr.message}\n`);
+          }
+        }
       } catch (err) {
         if (err instanceof RcaError) {
           process.stderr.write(`${err.message}\n`);
@@ -279,6 +309,60 @@ export function createProgram() {
 
       if (failures > 0) {
         process.exit(70);
+      }
+    });
+
+  const obsidianCmd = program.command('obsidian').description('Obsidian vault integration');
+
+  obsidianCmd
+    .command('sync <rca-path>')
+    .description('Sync an RCA file to the configured Obsidian vault')
+    .option('--open', 'Print obsidian:// URI after sync')
+    .action(async (rcaPath, opts) => {
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+
+        if (!cfg.obsidian || !cfg.obsidian.vault_path) {
+          throw new RcaError('NO_VAULT', {});
+        }
+
+        const vaultPath = cfg.obsidian.vault_path;
+        const targetFolder = cfg.obsidian.target_folder || 'RCA Inbox';
+        const resolvedRcaPath = resolvePath(cwd, rcaPath);
+        const rcaBasename = basename(resolvedRcaPath);
+
+        const destFile = await syncToVault({
+          rcaPath: resolvedRcaPath,
+          vaultPath,
+          targetFolder,
+        });
+        process.stderr.write(`✓ synced to ${destFile}\n`);
+
+        if (cfg.obsidian.update_daily_note) {
+          const matter = await import('gray-matter');
+          const content = readFileSync(resolvedRcaPath, 'utf8');
+          const { data } = matter.default(content);
+          appendDailyNote({
+            vaultPath,
+            dailyNotesFolder: cfg.obsidian.daily_notes_folder || 'Daily Notes',
+            dailyNoteFormat: cfg.obsidian.daily_note_format || 'YYYY-MM-DD',
+            rcaBasename,
+            title: data.title || rcaBasename,
+          });
+          process.stderr.write(`✓ daily note updated\n`);
+        }
+
+        if (opts.open) {
+          const uri = buildObsidianUri({ vaultPath, targetFolder, rcaBasename });
+          process.stdout.write(uri + '\n');
+        }
+      } catch (err) {
+        if (err instanceof RcaError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(err.exitCode);
+        }
+        throw err;
       }
     });
 
