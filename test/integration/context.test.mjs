@@ -51,6 +51,17 @@ describe('context extraction', () => {
     assert.ok(ctx.commit_message.includes('commit 2'));
   });
 
+  it('builds context from HEAD~2 (3-commit repo)', async () => {
+    setupRepo(tmp, 3);
+    const ctx = await buildContext({ cwd: tmp, ref: 'HEAD~2' });
+    assert.ok(ctx.commit_message.includes('commit 1'));
+    assert.strictEqual(typeof ctx.ref, 'string');
+    assert.strictEqual(ctx.short_hash.length, 7);
+    assert.ok(ctx.diff.length > 0);
+    assert.ok(ctx.files_changed.includes('file1.js'));
+    assert.ok(ctx.timestamp_utc);
+  });
+
   it('single-commit repo falls back to empty-tree compare', async () => {
     setupRepo(tmp, 1);
     const ctx = await buildContext({ cwd: tmp });

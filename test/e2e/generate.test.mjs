@@ -78,6 +78,14 @@ describe('generate e2e', () => {
     const content = readFileSync(rcaPath, 'utf8');
     assert.ok(content.includes('## Symptom'));
     assert.ok(content.includes('## Root Cause'));
+    // runCli uses execFileSync which throws on non-zero exit, so reaching here means exit 0
+  });
+
+  it('exits 0 on successful generation', () => {
+    makeConfig(tmp);
+    // execFileSync throws if exit != 0; if it returns, exit was 0
+    const stdout = runCli(['generate'], tmp);
+    assert.ok(stdout.trim().endsWith('.md'), 'stdout must be the RCA path');
   });
 
   it('--dry-run prints path but writes nothing', () => {
@@ -118,5 +126,16 @@ describe('generate e2e', () => {
     const log = readFileSync(logPath, 'utf8');
     const entry = JSON.parse(log.trim().split('\n')[0]);
     assert.ok(entry.argv.includes('--allowedTools'));
+  });
+
+  it('asserts --output-format json in stub argv log', () => {
+    const logPath = join(tmp, 'stub.log');
+    makeConfig(tmp);
+    runCli(['generate'], tmp, { CLAUDE_STUB_LOG: logPath });
+    const log = readFileSync(logPath, 'utf8');
+    const entry = JSON.parse(log.trim().split('\n')[0]);
+    const ofIdx = entry.argv.indexOf('--output-format');
+    assert.ok(ofIdx !== -1, '--output-format must be present in argv');
+    assert.strictEqual(entry.argv[ofIdx + 1], 'json');
   });
 });

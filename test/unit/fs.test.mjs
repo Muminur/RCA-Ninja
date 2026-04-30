@@ -47,6 +47,13 @@ describe('atomicWrite', () => {
     const files = readdirSync(tmp);
     assert.ok(!files.some((f) => f.includes('.tmp-')));
   });
+
+  it('EXDEV fallback: source contains copyFileSync+unlinkSync branch', async () => {
+    const src = readFileSync(new URL('../../src/util/fs.mjs', import.meta.url), 'utf8');
+    assert.ok(src.includes("err.code === 'EXDEV'"), 'EXDEV guard must be present');
+    assert.ok(src.includes('copyFileSync(tmpPath, dest)'), 'EXDEV fallback must copy the file');
+    assert.ok(src.includes('unlinkSync(tmpPath)'), 'EXDEV fallback must unlink the tmp file');
+  });
 });
 
 describe('acquireLock / releaseLock', () => {
