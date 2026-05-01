@@ -1,8 +1,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?logo=nodedotjs&logoColor=white" alt="Node.js >= 20" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" />
-  <img src="https://img.shields.io/badge/tests-213%20passed-brightgreen" alt="213 Tests" />
-  <img src="https://img.shields.io/badge/coverage-83.82%25-brightgreen" alt="83.82% Coverage" />
+  <img src="https://img.shields.io/badge/tests-285%20passed-brightgreen" alt="285 Tests" />
+  <img src="https://img.shields.io/badge/coverage-85%25-brightgreen" alt="85% Coverage" />
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="v0.1.0" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Cross-platform" />
 </p>
@@ -39,16 +39,24 @@ Your entire bug-fix history becomes a searchable knowledge base — no postmorte
 
 ## Features
 
-|                | Feature                 | Description                                                            |
-| -------------- | ----------------------- | ---------------------------------------------------------------------- |
-| **Automated**  | One-command generation  | `claude-rca generate` analyzes the diff and produces a structured RCA  |
-| **Validated**  | Schema-enforced output  | JSON Schema validation at generation time — no malformed documents     |
-| **Searchable** | ripgrep-powered search  | Full-text search across your entire RCA corpus in milliseconds         |
-| **Secure**     | Read-only Claude access | Claude cannot write, edit, or shell out during generation              |
-| **Atomic**     | Crash-safe writes       | Every file write uses tmp → fsync → rename — no partial files          |
-| **Hookable**   | Git hook automation     | Auto-generate RCAs on every `fix:` commit in the background            |
-| **Obsidian**   | Vault sync              | Atomically copies RCAs to your Obsidian vault with daily note links    |
-| **Portable**   | Plain Markdown output   | Works with GitHub, Obsidian, `grep`, `cat` — anything that reads `.md` |
+|                | Feature                   | Description                                                                  |
+| -------------- | ------------------------- | ---------------------------------------------------------------------------- |
+| **Automated**  | One-command generation    | `claude-rca generate` analyzes the diff and produces a structured RCA        |
+| **Validated**  | Schema-enforced output    | JSON Schema validation at generation time — no malformed documents           |
+| **Searchable** | ripgrep-powered search    | Full-text search across your entire RCA corpus in milliseconds               |
+| **Secure**     | Read-only Claude access   | Claude cannot write, edit, or shell out during generation                    |
+| **Atomic**     | Crash-safe writes         | Every file write uses tmp → fsync → rename — no partial files                |
+| **Hookable**   | Git hook automation       | Auto-generate RCAs on every `fix:` commit in the background                  |
+| **Obsidian**   | Vault sync                | Atomically copies RCAs to your Obsidian vault with daily note links          |
+| **Portable**   | Plain Markdown output     | Works with GitHub, Obsidian, `grep`, `cat` — anything that reads `.md`       |
+| **Quality**    | Auto-fill tracking        | Fields patched by the generator are flagged via `auto_filled` in frontmatter |
+| **Audit**      | Corpus quality check      | `claude-rca audit` flags degraded RCAs with auto-filled fields               |
+| **Blame**      | Bug introduction tracking | `bug_introduced_by` in frontmatter shows when/who introduced the bug         |
+| **Webhooks**   | Slack/Discord/generic     | POST a notification on RCA generation to any webhook URL                     |
+| **Progress**   | Spinner UX                | TTY-aware spinner with phase markers and elapsed time                        |
+| **Templates**  | Per-project customization | Override schema and prompt via `.claude-rca/` directory                      |
+| **Wizard**     | Interactive setup         | `claude-rca setup` configures vault, API keys, and hooks in one command      |
+| **Dedup**      | Related RCA detection     | Finds duplicate/related RCAs before generating, links them in references     |
 
 ---
 
@@ -228,6 +236,11 @@ claude-rca/
 │   ├── search.mjs          # ripgrep-backed full-text search
 │   ├── slug.mjs            # Deterministic URL-safe slug generation
 │   ├── writer.mjs          # Atomic file writer with collision handling
+│   ├── audit.mjs           # RCA corpus quality auditing
+│   ├── dedup.mjs           # Duplicate/related RCA detection
+│   ├── progress.mjs        # TTY-aware spinner with phases
+│   ├── template.mjs        # Per-project schema/prompt overrides
+│   ├── webhook.mjs         # Slack/Discord/generic webhook notifications
 │   ├── obsidian-api.mjs    # REST API client for Obsidian Local REST API
 │   ├── mcp-server.mjs      # MCP protocol server (11 tools)
 │   └── util/
@@ -245,7 +258,7 @@ claude-rca/
 │   ├── install.sh          # macOS/Linux one-line installer
 │   └── install.ps1         # Windows PowerShell installer
 ├── .env.example            # Template for Obsidian API credentials
-└── test/                   # 213 tests (unit + integration + e2e)
+└── test/                   # 285 tests (unit + integration + e2e)
 ```
 
 ---
@@ -313,17 +326,21 @@ All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
 
 ### Commands
 
-| Command                     | Description                                           |
-| --------------------------- | ----------------------------------------------------- |
-| `claude-rca init`           | Create `.claude-rca.json` config and `rca/` directory |
-| `claude-rca generate`       | Generate an RCA for a commit                          |
-| `claude-rca search <query>` | Full-text search across RCA corpus                    |
-| `claude-rca recent [count]` | List the N most recent RCAs (default: 10)             |
-| `claude-rca show <id>`      | Display an RCA by filename, hash, or path             |
-| `claude-rca config`         | Read/write configuration values                       |
-| `claude-rca doctor`         | Verify environment (Node, git, rg, claude)            |
-| `claude-rca obsidian sync`  | Sync an RCA file to the Obsidian vault                |
-| `claude-rca mcp-server`     | Start the MCP server for Claude Desktop/Code          |
+| Command                        | Description                                           |
+| ------------------------------ | ----------------------------------------------------- |
+| `claude-rca init`              | Create `.claude-rca.json` config and `rca/` directory |
+| `claude-rca generate`          | Generate an RCA for a commit                          |
+| `claude-rca search <query>`    | Full-text search across RCA corpus                    |
+| `claude-rca recent [count]`    | List the N most recent RCAs (default: 10)             |
+| `claude-rca show <id>`         | Display an RCA by filename, hash, or path             |
+| `claude-rca config`            | Read/write configuration values                       |
+| `claude-rca doctor`            | Verify environment (Node, git, rg, claude)            |
+| `claude-rca obsidian sync`     | Sync an RCA file to the Obsidian vault                |
+| `claude-rca mcp-server`        | Start the MCP server for Claude Desktop/Code          |
+| `claude-rca setup`             | Interactive setup wizard                              |
+| `claude-rca audit`             | Check RCA quality — flag auto-filled fields           |
+| `claude-rca rebuild`           | Re-validate RCAs against current schema               |
+| `claude-rca obsidian sync-all` | Sync all RCAs to Obsidian vault                       |
 
 ### Generate Options
 
@@ -649,6 +666,31 @@ That's it. RCA-Ninja automatically reads `.env` on startup — no `config --set`
 
 ---
 
+## Webhook Notifications
+
+```bash
+claude-rca config --set webhooks.enabled=true
+claude-rca config --set webhooks.url=https://hooks.slack.com/services/...
+claude-rca config --set webhooks.format=slack   # or: discord, generic
+```
+
+Supported formats: `slack` (Slack incoming webhook), `discord` (Discord webhook), `generic` (raw JSON POST).
+
+---
+
+## Custom Templates
+
+Override the default RCA schema or system prompt per-project:
+
+```bash
+mkdir .claude-rca
+cp node_modules/claude-rca/prompts/rca-schema.json .claude-rca/
+cp node_modules/claude-rca/prompts/rca-system.md .claude-rca/
+# Edit to customize fields, prompts, etc.
+```
+
+---
+
 ## Development
 
 ```bash
@@ -656,7 +698,7 @@ npm test                  # unit tests
 npm run test:integration  # integration tests
 npm run test:e2e          # e2e tests with claude-stub
 npm run coverage          # c8 report (target ≥83%)
-npm run check             # lint + typecheck + test + coverage gate (213 total)
+npm run check             # lint + typecheck + test + coverage gate (285 total)
 npm run lint              # eslint + prettier
 npm run format            # auto-format with prettier
 ```

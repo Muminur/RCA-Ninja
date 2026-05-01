@@ -1,0 +1,58 @@
+name: RCA Analysis on Fix PRs
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  rca-check:
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.title, 'fix') || contains(github.event.pull_request.title, 'Fix')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-rca
+        run: |
+          npm install -g claude-rca
+          claude-rca doctor || true
+
+      - name: Check for related RCAs
+        run: |
+          # List files changed in this PR
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "Changed files: $CHANGED_FILES"
+
+          # Search for related RCAs if rca/ exists
+          if [ -d rca ]; then
+            claude-rca search "$(echo $CHANGED_FILES | head -1)" --json 2>/dev/null || echo "[]"
+          fi
+
+      - name: Comment on PR
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `## RCA Check
+
+            This PR contains bug-fix changes. After merging, run:
+            \`\`\`bash
+            claude-rca generate
+            \`\`\`
+
+            To auto-generate RCAs on every fix commit, enable the post-commit hook:
+            \`\`\`bash
+            claude-rca config --set auto_generate=true
+            \`\`\``;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });

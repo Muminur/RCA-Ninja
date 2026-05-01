@@ -18,6 +18,7 @@ import { sendWebhook } from './webhook.mjs';
 import { createProgress } from './progress.mjs';
 import { resolveTemplatePaths } from './template.mjs';
 import { auditCorpus } from './audit.mjs';
+import { findRelatedRcas } from './dedup.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -291,6 +292,19 @@ export function createProgram() {
           });
           process.stdout.write(p + '\n');
           return;
+        }
+
+        const relatedRcas = findRelatedRcas({
+          outputDir: cfg.output_dir,
+          filesChanged: context.files_changed,
+        });
+        if (relatedRcas.length > 0) {
+          process.stderr.write(`⚠ Found ${relatedRcas.length} related RCA(s):\n`);
+          for (const r of relatedRcas) {
+            process.stderr.write(
+              `  - ${r.title} (${Math.round(r.overlap_score * 100)}% overlap)\n`,
+            );
+          }
         }
 
         progress.update('Calling Claude');
@@ -725,6 +739,160 @@ export function createProgram() {
           );
           process.exit(1);
         }
+      }
+    });
+
+  program
+    .command('rebuild')
+    .description('Re-validate existing RCAs against current schema; --fix to patch missing fields')
+    .option('--fix', 'Auto-fix missing required fields with defaults')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        const { readdirSync: readdir } = await import('node:fs');
+        const { validateRca } = await import('./schema.mjs');
+        const matter = await import('gray-matter');
+
+        const mdFiles = [];
+        try {
+          for (const entry of readdir(cfg.output_dir, { recursive: true })) {
+            if (typeof entry === 'string' && entry.endsWith('.md')) {
+              mdFiles.push(join(cfg.output_dir, entry));
+            }
+          }
+        } catch {
+          process.stderr.write('No RCA directory found.\n');
+          return;
+        }
+
+        const results = { valid: [], invalid: [], fixed: [] };
+        for (const filePath of mdFiles) {
+          const raw = readFileSync(filePath, 'utf8');
+          const { data } = matter.default(raw);
+          const check = validateRca(data);
+          if (check.valid) {
+            results.valid.push(filePath);
+          } else if (opts.fix) {
+            if (!data.files) data.files = ['unknown'];
+            if (!data.references) data.references = [];
+            if (!data.confidence) data.confidence = 'medium';
+            if (!data.tags || data.tags.length < 2) data.tags = ['rca', 'bugfix'];
+            if (!data.impact) data.impact = data.symptom || 'Unknown impact.';
+            const recheck = validateRca(data);
+            if (recheck.valid) {
+              const updated = matter.default.stringify(
+                raw.replace(/^---[\s\S]*?---/, '').trim(),
+                data,
+              );
+              const { atomicWrite } = await import('./util/fs.mjs');
+              await atomicWrite(filePath, updated);
+              results.fixed.push(filePath);
+            } else {
+              results.invalid.push({ path: filePath, errors: recheck.errors });
+            }
+          } else {
+            results.invalid.push({ path: filePath, errors: check.errors });
+          }
+        }
+
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(results, null, 2) + '\n');
+        } else {
+          process.stderr.write(
+            `Valid: ${results.valid.length}, Invalid: ${results.invalid.length}, Fixed: ${results.fixed.length}\n`,
+          );
+          for (const item of results.invalid) {
+            process.stderr.write(`  ✖ ${basename(item.path)}: ${item.errors[0]}\n`);
+          }
+          for (const f of results.fixed) {
+            process.stderr.write(`  ✓ fixed ${basename(f)}\n`);
+          }
+        }
+        if (results.invalid.length > 0) process.exit(1);
+      } catch (err) {
+        if (err instanceof RcaError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
+    });
+
+  obsidianCmd
+    .command('sync-all')
+    .description('Sync all RCA files to the Obsidian vault')
+    .action(async () => {
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        const { readdirSync: readdir } = await import('node:fs');
+
+        if (!cfg.obsidian || (!cfg.obsidian.vault_path && !cfg.obsidian.api_key)) {
+          throw new RcaError('NO_VAULT', {});
+        }
+
+        const mdFiles = [];
+        try {
+          for (const entry of readdir(cfg.output_dir, { recursive: true })) {
+            if (typeof entry === 'string' && entry.endsWith('.md')) {
+              mdFiles.push(join(cfg.output_dir, entry));
+            }
+          }
+        } catch {
+          process.stderr.write('No RCA files found.\n');
+          return;
+        }
+
+        let synced = 0;
+        const targetFolder = cfg.obsidian.target_folder || 'RCA Inbox';
+        const vaultPath = cfg.obsidian.vault_path;
+        let client = null;
+        if (cfg.obsidian.api_key) {
+          try {
+            client = createObsidianClient({
+              apiKey: cfg.obsidian.api_key,
+              host: cfg.obsidian.api_host || '127.0.0.1',
+              port: cfg.obsidian.api_port || 27124,
+              protocol: cfg.obsidian.api_protocol || 'https',
+            });
+          } catch {
+            client = null;
+          }
+        }
+
+        for (const filePath of mdFiles) {
+          const rcaBasename = basename(filePath);
+          const content = readFileSync(filePath, 'utf8');
+          let ok = false;
+
+          if (client) {
+            try {
+              await client.createNote(`${targetFolder}/${rcaBasename}`, content);
+              ok = true;
+            } catch {
+              /* fall through */
+            }
+          }
+          if (!ok && vaultPath) {
+            try {
+              await syncToVault({ rcaPath: filePath, vaultPath, targetFolder });
+              ok = true;
+            } catch {
+              /* skip */
+            }
+          }
+          if (ok) synced++;
+        }
+
+        process.stderr.write(`✓ synced ${synced}/${mdFiles.length} RCAs to vault\n`);
+      } catch (err) {
+        if (err instanceof RcaError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(err.exitCode);
+        }
+        throw err;
       }
     });
 
