@@ -1,8 +1,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?logo=nodedotjs&logoColor=white" alt="Node.js >= 20" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" />
-  <img src="https://img.shields.io/badge/tests-220%20passed-brightgreen" alt="220 Tests" />
-  <img src="https://img.shields.io/badge/coverage-86.57%25-brightgreen" alt="86.57% Coverage" />
+  <img src="https://img.shields.io/badge/tests-213%20passed-brightgreen" alt="213 Tests" />
+  <img src="https://img.shields.io/badge/coverage-83.82%25-brightgreen" alt="83.82% Coverage" />
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="v0.1.0" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Cross-platform" />
 </p>
@@ -66,6 +66,16 @@ curl -fsSL https://raw.githubusercontent.com/Muminur/RCA-Ninja/main/scripts/inst
 irm https://raw.githubusercontent.com/Muminur/RCA-Ninja/main/scripts/install.ps1 | iex
 ```
 
+The installer automatically:
+
+1. Checks/installs prerequisites (Node.js, git, ripgrep, Claude Code CLI)
+2. Clones the repo and runs `npm ci && npm link`
+3. Runs `claude-rca doctor` to verify the environment
+4. **(Interactive)** Offers to set up [Obsidian REST API](#obsidian-rest-api-integration) — enter your API key to enable vault sync
+5. **(Interactive)** Offers to configure [MCP Server](#mcp-server-claude-integration) in Claude Desktop
+
+> When piped (`curl | bash`), interactive prompts default to "no" — run the script directly for the full setup experience: `bash ~/.claude-rca/scripts/install.sh`
+
 ### npm (if prerequisites are already installed)
 
 ```bash
@@ -87,24 +97,29 @@ npm ci && npm link
 ## Quick Start
 
 ```bash
-# 1. Initialize in your repo
+# 1. Initialize in your repo (creates config + installs git hooks)
 cd your-git-repo
 claude-rca init
-# → Creates .claude-rca.json and rca/ directory
 
-# 2. Fix a bug and commit
+# 2. (Optional) Set up Obsidian sync — create .env from template
+cp .env.example .env
+# Edit .env → add your OBSIDIAN_API_KEY from Obsidian Settings → Local REST API
+claude-rca config --set obsidian.enabled=true
+claude-rca config --set "obsidian.vault_path=/path/to/vault"
+
+# 3. Fix a bug and commit (hook auto-generates RCA in background)
 git commit -m "fix: null-check session before dereferencing user.id"
+# → RCA generated automatically via post-commit hook
 
-# 3. Generate an RCA
+# 4. Or generate manually
 claude-rca generate
-# → rca/2026/04/RCA-2026-04-26-a3f2c1d-null-check-session.md
 
-# 4. Search your corpus later
+# 5. Search your corpus later
 claude-rca search "null pointer"
 claude-rca recent 5
 claude-rca show RCA-2026-04-26-a3f2c1d-null-check-session
 
-# 5. Verify your environment
+# 6. Verify your environment
 claude-rca doctor
 ```
 
@@ -225,7 +240,7 @@ claude-rca/
 │   ├── install.sh          # macOS/Linux one-line installer
 │   └── install.ps1         # Windows PowerShell installer
 ├── .env.example            # Template for Obsidian API credentials
-└── test/                   # 220 tests (unit + integration + e2e)
+└── test/                   # 213 tests (unit + integration + e2e)
 ```
 
 ---
@@ -367,10 +382,6 @@ claude-rca config --set <key>=<value>       # Write a value
 ```
 
 > **Secrets go in `.env`, not config.** The Obsidian API key is loaded from environment variables — never store it in `.claude-rca.json`. See [Obsidian REST API Integration](#obsidian-rest-api-integration) for setup.
-
-```
-
-```
 
 ### Configuration Hierarchy
 
@@ -636,11 +647,11 @@ That's it. RCA-Ninja automatically reads `.env` on startup — no `config --set`
 ## Development
 
 ```bash
-npm test                  # unit tests (129 tests)
-npm run test:integration  # integration tests (76 tests)
-npm run test:e2e          # e2e tests with claude-stub (15 tests)
-npm run coverage          # c8 report (target ≥85%)
-npm run check             # lint + typecheck + test + coverage gate (220 total)
+npm test                  # unit tests
+npm run test:integration  # integration tests
+npm run test:e2e          # e2e tests with claude-stub
+npm run coverage          # c8 report (target ≥83%)
+npm run check             # lint + typecheck + test + coverage gate (213 total)
 npm run lint              # eslint + prettier
 npm run format            # auto-format with prettier
 ```
