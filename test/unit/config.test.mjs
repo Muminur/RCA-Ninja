@@ -63,7 +63,7 @@ describe('config', () => {
     );
     const cfg = loadConfig({ cwd: tmp });
     assert.strictEqual(cfg.claude.timeout_ms, 30000);
-    assert.strictEqual(cfg.claude.use_bare, true);
+    assert.strictEqual(cfg.claude.use_bare, false);
     assert.strictEqual(cfg.obsidian.enabled, true);
     assert.strictEqual(cfg.obsidian.target_folder, 'RCA Inbox');
   });

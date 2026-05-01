@@ -37,7 +37,7 @@ export async function generate({ context, config, systemPromptPath, schemaPath }
     const binaryParts = binaryRaw.split(/\s+/);
     const cmd = binaryParts[0];
     const cmdPrefix = binaryParts.slice(1);
-    const useBare = config.claude?.use_bare !== false;
+    const useBare = config.claude?.use_bare === true && !!process.env.ANTHROPIC_API_KEY;
     const permissionMode = config.claude?.permission_mode || 'plan';
     const allowedTools = config.claude?.allowed_tools || 'Read';
     const timeoutMs = config.claude?.timeout_ms || 60000;
@@ -57,7 +57,57 @@ export async function generate({ context, config, systemPromptPath, schemaPath }
       try {
         const { stdout } = await run(cmd, argv, { timeoutMs });
         const parsed = JSON.parse(stdout);
-        const rcaData = parsed.structured_output;
+        let rcaData = parsed.structured_output;
+
+        if (!rcaData && parsed.result) {
+          const jsonMatch = parsed.result.match(/```json\s*([\s\S]*?)```/);
+          const raw = jsonMatch ? jsonMatch[1].trim() : parsed.result.trim();
+          try {
+            rcaData = JSON.parse(raw);
+          } catch {
+            throw new RcaError('SCHEMA_VALIDATION', {
+              ajv_first_error: 'Could not parse RCA JSON from claude output',
+            });
+          }
+        }
+
+        if (rcaData) {
+          const ALLOWED_KEYS = new Set([
+            'title',
+            'symptom',
+            'root_cause',
+            'fix',
+            'impact',
+            'files',
+            'tags',
+            'references',
+            'confidence',
+          ]);
+          for (const key of Object.keys(rcaData)) {
+            if (!ALLOWED_KEYS.has(key)) delete rcaData[key];
+          }
+          for (const f of ['title', 'symptom', 'root_cause', 'fix', 'impact']) {
+            if (rcaData[f] && typeof rcaData[f] !== 'string') {
+              rcaData[f] = Array.isArray(rcaData[f]) ? rcaData[f].join('. ') : String(rcaData[f]);
+            }
+          }
+          for (const f of ['files', 'tags', 'references']) {
+            if (rcaData[f] && !Array.isArray(rcaData[f])) {
+              rcaData[f] = typeof rcaData[f] === 'string' ? [rcaData[f]] : [];
+            }
+          }
+          if (!rcaData.files || rcaData.files.length === 0)
+            rcaData.files = context.files_changed || ['unknown'];
+          if (!rcaData.references) rcaData.references = [];
+          if (
+            !rcaData.confidence ||
+            !['high', 'medium', 'low', 'unknown'].includes(rcaData.confidence)
+          )
+            rcaData.confidence = 'medium';
+          if (!rcaData.tags || rcaData.tags.length < 2) rcaData.tags = ['rca', 'bugfix'];
+          if (!rcaData.impact)
+            rcaData.impact = rcaData.symptom || 'See symptom for affected scope.';
+        }
 
         const result = validateRca(rcaData);
         if (!result.valid) {

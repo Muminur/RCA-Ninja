@@ -32,7 +32,7 @@ export function createObsidianClient({
           Authorization: `Bearer ${apiKey}`,
           Accept: 'application/json',
         },
-        rejectAuthorized: false,
+        rejectUnauthorized: false,
       };
 
       if (body != null) {

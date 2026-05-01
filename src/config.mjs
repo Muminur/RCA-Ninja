@@ -27,14 +27,14 @@ function loadDotenv(dir) {
 export const DEFAULTS = {
   version: 1,
   output_dir: './rca',
-  claude: { use_bare: true, permission_mode: 'plan', allowed_tools: 'Read,Bash' },
+  claude: { use_bare: false, permission_mode: 'plan', allowed_tools: 'Read,Bash' },
   obsidian: { enabled: false },
 };
 
 const INIT_CONFIG = {
   version: 1,
   output_dir: './rca',
-  claude: { use_bare: true, permission_mode: 'plan', allowed_tools: 'Read,Bash' },
+  claude: { use_bare: false, permission_mode: 'plan', allowed_tools: 'Read,Bash' },
   obsidian: { enabled: false },
 };
 
