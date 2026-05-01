@@ -226,4 +226,22 @@ describe('obsidian sync subcommand', () => {
     );
     assert.ok(exitCode !== null && exitCode > 0, 'must exit non-zero for NO_VAULT');
   });
+
+  it('falls back to filesystem when REST API is unreachable', async () => {
+    const { tmp, vault, rcaName } = createObsidianFixture();
+    const configPath = join(tmp, '.claude-rca.json');
+    const cfg = JSON.parse(readFileSync(configPath, 'utf8'));
+    cfg.obsidian.api_key = 'fake-key-for-test';
+    cfg.obsidian.api_host = '192.0.2.1';
+    cfg.obsidian.api_port = 1;
+    cfg.obsidian.api_protocol = 'http';
+    writeFileSync(configPath, JSON.stringify(cfg));
+
+    const rcaRelPath = join('rca', '2026', '01', rcaName);
+    await capture(() =>
+      createProgram().parseAsync(['node', 'rca', '--cwd', tmp, 'obsidian', 'sync', rcaRelPath]),
+    );
+    const dest = join(vault, 'RCA Inbox', rcaName);
+    assert.ok(existsSync(dest), 'must fall back to filesystem sync');
+  });
 });

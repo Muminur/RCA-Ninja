@@ -120,4 +120,65 @@ describe('config', () => {
       (err) => err.code === 'INVALID_CONFIG_VALUE',
     );
   });
+
+  it('loads .env file and sets OBSIDIAN_API_KEY from environment', () => {
+    const envKey = 'test-env-key-' + Date.now();
+    writeFileSync(join(tmp, '.env'), `OBSIDIAN_API_KEY=${envKey}\nOBSIDIAN_PORT=27124\n`);
+    writeFileSync(
+      join(tmp, '.claude-rca.json'),
+      JSON.stringify({ version: 1, obsidian: { enabled: true } }),
+    );
+    const origKey = process.env.OBSIDIAN_API_KEY;
+    const origPort = process.env.OBSIDIAN_PORT;
+    delete process.env.OBSIDIAN_API_KEY;
+    delete process.env.OBSIDIAN_PORT;
+    try {
+      const cfg = loadConfig({ cwd: tmp });
+      assert.strictEqual(cfg.obsidian.api_key, envKey);
+      assert.strictEqual(cfg.obsidian.api_port, 27124);
+    } finally {
+      if (origKey) process.env.OBSIDIAN_API_KEY = origKey;
+      else delete process.env.OBSIDIAN_API_KEY;
+      if (origPort) process.env.OBSIDIAN_PORT = origPort;
+      else delete process.env.OBSIDIAN_PORT;
+    }
+  });
+
+  it('.env does not override existing environment variables', () => {
+    const envKey = 'existing-key-' + Date.now();
+    process.env.OBSIDIAN_API_KEY = envKey;
+    writeFileSync(join(tmp, '.env'), 'OBSIDIAN_API_KEY=should-not-override\n');
+    writeFileSync(
+      join(tmp, '.claude-rca.json'),
+      JSON.stringify({ version: 1, obsidian: { enabled: true } }),
+    );
+    try {
+      const cfg = loadConfig({ cwd: tmp });
+      assert.strictEqual(cfg.obsidian.api_key, envKey);
+    } finally {
+      delete process.env.OBSIDIAN_API_KEY;
+    }
+  });
+
+  it('.env handles comments, empty lines, and quoted values', () => {
+    writeFileSync(
+      join(tmp, '.env'),
+      '# comment\n\nOBSIDIAN_HOST="custom-host"\nOBSIDIAN_PORT=27125\n',
+    );
+    writeFileSync(join(tmp, '.claude-rca.json'), JSON.stringify({ version: 1 }));
+    const origHost = process.env.OBSIDIAN_HOST;
+    const origPort = process.env.OBSIDIAN_PORT;
+    delete process.env.OBSIDIAN_HOST;
+    delete process.env.OBSIDIAN_PORT;
+    try {
+      const cfg = loadConfig({ cwd: tmp });
+      assert.strictEqual(cfg.obsidian.api_host, 'custom-host');
+      assert.strictEqual(cfg.obsidian.api_port, 27125);
+    } finally {
+      if (origHost) process.env.OBSIDIAN_HOST = origHost;
+      else delete process.env.OBSIDIAN_HOST;
+      if (origPort) process.env.OBSIDIAN_PORT = origPort;
+      else delete process.env.OBSIDIAN_PORT;
+    }
+  });
 });
