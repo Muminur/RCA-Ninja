@@ -37,7 +37,7 @@ export async function generate({ context, config, systemPromptPath, schemaPath }
     const binaryParts = binaryRaw.split(/\s+/);
     const cmd = binaryParts[0];
     const cmdPrefix = binaryParts.slice(1);
-    const useBare = config.claude?.use_bare === true && !!process.env.ANTHROPIC_API_KEY;
+    const useBare = !!process.env.ANTHROPIC_API_KEY;
     const permissionMode = config.claude?.permission_mode || 'plan';
     const allowedTools = config.claude?.allowed_tools || 'Read';
     const timeoutMs = config.claude?.timeout_ms || 60000;

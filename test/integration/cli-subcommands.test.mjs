@@ -1,6 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  readFileSync,
+  rmdirSync,
+  unlinkSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createProgram } from '../../src/cli.mjs';
@@ -243,5 +251,64 @@ describe('obsidian sync subcommand', () => {
     );
     const dest = join(vault, 'RCA Inbox', rcaName);
     assert.ok(existsSync(dest), 'must fall back to filesystem sync');
+  });
+});
+
+describe('doctor subcommand — sentinel check', () => {
+  it('prints WARN line when .last-rca-error sentinel exists in output_dir', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-cli-'));
+    const rcaDir = join(tmp, 'rca');
+    mkdirSync(rcaDir, { recursive: true });
+    const sentinelPath = join(rcaDir, '.last-rca-error');
+
+    writeFileSync(
+      join(tmp, '.claude-rca.json'),
+      JSON.stringify({ version: 1, output_dir: rcaDir }),
+    );
+    writeFileSync(
+      sentinelPath,
+      JSON.stringify({ timestamp: '2026-04-30T12:00:00Z', ref: 'deadbeef', error: 'exit 21' }),
+    );
+
+    const { stdout } = await capture(() =>
+      createProgram().parseAsync(['node', 'rca', '--cwd', tmp, 'doctor']),
+    );
+
+    // Clean up
+    unlinkSync(sentinelPath);
+    unlinkSync(join(tmp, '.claude-rca.json'));
+    rmdirSync(rcaDir);
+    rmdirSync(tmp);
+
+    assert.ok(stdout.includes('WARN'), `doctor stdout should include WARN but got:\n${stdout}`);
+    assert.ok(
+      stdout.includes('deadbeef'),
+      `doctor stdout should include the ref 'deadbeef' but got:\n${stdout}`,
+    );
+  });
+
+  it('does not print WARN when sentinel is absent', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-cli-'));
+    const rcaDir = join(tmp, 'rca');
+    mkdirSync(rcaDir, { recursive: true });
+
+    writeFileSync(
+      join(tmp, '.claude-rca.json'),
+      JSON.stringify({ version: 1, output_dir: rcaDir }),
+    );
+
+    const { stdout } = await capture(() =>
+      createProgram().parseAsync(['node', 'rca', '--cwd', tmp, 'doctor']),
+    );
+
+    // Clean up
+    unlinkSync(join(tmp, '.claude-rca.json'));
+    rmdirSync(rcaDir);
+    rmdirSync(tmp);
+
+    assert.ok(
+      !stdout.includes('rca-gen  WARN'),
+      `doctor stdout should NOT include WARN when no sentinel, but got:\n${stdout}`,
+    );
   });
 });

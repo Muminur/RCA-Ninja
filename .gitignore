@@ -23,9 +23,6 @@ PLANNING.md
 TASKS.md
 RCA_PRD.md
 docs/**/*.md
-prompts/*.md
-.claude/agents/*.md
-.claude/commands/*.md
 
 # Local-only docs (tracked locally, not pushed)
 docs/architecture.md

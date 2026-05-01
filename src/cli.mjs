@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,6 +74,161 @@ export function createProgram() {
           } catch {
             process.stderr.write(`⚠ git hooks not installed (bash not available)\n`);
           }
+        }
+      } catch (err) {
+        if (err instanceof RcaError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
+    });
+
+  program
+    .command('setup')
+    .description('Interactive setup wizard — configure vault, API keys, and environment')
+    .action(async () => {
+      function ask(question) {
+        const rl = createInterface({ input: process.stdin, output: process.stderr });
+        return new Promise((resolve) => {
+          rl.question(question, (answer) => {
+            rl.close();
+            resolve(answer.trim());
+          });
+        });
+      }
+
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const configPath = join(cwd, '.claude-rca.json');
+
+        // Step 1: Run init if .claude-rca.json doesn't exist
+        if (!existsSync(configPath)) {
+          process.stderr.write('No .claude-rca.json found — running init...\n');
+          const { rcaDir } = initProject(cwd);
+          process.stderr.write(`✓ created ${rcaDir}\n`);
+          process.stderr.write(`✓ wrote ${configPath}\n`);
+        } else {
+          process.stderr.write(`✓ config already exists at ${configPath}\n`);
+        }
+
+        // Step 2: Detect Obsidian vault
+        const home = homedir();
+        const candidatePaths = [
+          join(home, 'Documents', 'Obsidian Vault'),
+          join(home, 'Documents', 'Obsidian'),
+          join(home, 'Obsidian'),
+        ];
+        let detectedVault = null;
+        for (const p of candidatePaths) {
+          if (existsSync(p)) {
+            detectedVault = p;
+            break;
+          }
+        }
+
+        let vaultPath = null;
+        if (detectedVault) {
+          process.stderr.write(`\nDetected Obsidian vault at: ${detectedVault}\n`);
+          const confirm = await ask(`Use this vault? [Y/n] `);
+          if (confirm === '' || confirm.toLowerCase() === 'y' || confirm.toLowerCase() === 'yes') {
+            vaultPath = detectedVault;
+          } else {
+            const custom = await ask('Enter vault path (leave blank to skip): ');
+            if (custom) vaultPath = resolvePath(cwd, custom);
+          }
+        } else {
+          process.stderr.write('\nNo Obsidian vault detected in common locations.\n');
+          const custom = await ask('Enter vault path (leave blank to skip): ');
+          if (custom) vaultPath = resolvePath(cwd, custom);
+        }
+
+        // Step 3: Ask if they want REST API sync
+        const wantApi = await ask('\nEnable Obsidian REST API sync? [y/N] ');
+        if (wantApi.toLowerCase() === 'y' || wantApi.toLowerCase() === 'yes') {
+          const apiKey = await ask('Enter Obsidian REST API key: ');
+          if (apiKey) {
+            const { atomicWrite } = await import('./util/fs.mjs');
+            const envPath = join(cwd, '.env');
+            let existing = '';
+            if (existsSync(envPath)) {
+              existing = readFileSync(envPath, 'utf8');
+              // Remove any existing OBSIDIAN_API_KEY line
+              existing = existing
+                .split('\n')
+                .filter((line) => !line.startsWith('OBSIDIAN_API_KEY='))
+                .join('\n');
+              if (existing && !existing.endsWith('\n')) existing += '\n';
+            }
+            await atomicWrite(envPath, existing + `OBSIDIAN_API_KEY=${apiKey}\n`);
+            process.stderr.write(`✓ wrote OBSIDIAN_API_KEY to .env\n`);
+          }
+        }
+
+        // Step 4: Set auto_generate=true
+        setConfigValue(configPath, 'auto_generate', 'true');
+        process.stderr.write(`✓ set auto_generate=true\n`);
+
+        // Step 5: Set obsidian.enabled=true with vault path
+        if (vaultPath) {
+          setConfigValue(configPath, 'obsidian.enabled', 'true');
+          setConfigValue(configPath, 'obsidian.vault_path', vaultPath);
+          process.stderr.write(`✓ set obsidian.enabled=true\n`);
+          process.stderr.write(`✓ set obsidian.vault_path=${vaultPath}\n`);
+        }
+
+        // Step 6: Run doctor to verify
+        process.stderr.write('\nRunning doctor checks...\n');
+        const { execFileSync: execSync } = await import('node:child_process');
+        const doctorChecks = [];
+        let doctorFailures = 0;
+
+        function doctorCheck(name, fn) {
+          try {
+            const detail = fn();
+            doctorChecks.push({ name, status: 'ok', detail });
+          } catch (err) {
+            doctorFailures++;
+            doctorChecks.push({ name, status: 'FAIL', detail: err.message || String(err) });
+          }
+        }
+
+        doctorCheck('node', () => {
+          const ver = process.version;
+          const major = parseInt(ver.slice(1), 10);
+          if (major < 20) throw new RcaError('DOCTOR_UNHEALTHY', { n: 1 });
+          return ver;
+        });
+
+        doctorCheck('git', () => execSync('git', ['--version'], { encoding: 'utf8' }).trim());
+
+        doctorCheck(
+          'rg',
+          () => execSync('rg', ['--version'], { encoding: 'utf8' }).trim().split('\n')[0],
+        );
+
+        doctorCheck('claude', () => execSync('claude', ['--version'], { encoding: 'utf8' }).trim());
+
+        const maxName = Math.max(...doctorChecks.map((c) => c.name.length));
+        for (const c of doctorChecks) {
+          process.stderr.write(`  ${c.name.padEnd(maxName + 2)}${c.status.padEnd(6)}${c.detail}\n`);
+        }
+
+        // Step 7: Print summary
+        process.stderr.write('\n--- Setup complete ---\n');
+        process.stderr.write(`  Config:       ${configPath}\n`);
+        process.stderr.write(`  auto_generate: true\n`);
+        if (vaultPath) {
+          process.stderr.write(`  Vault:        ${vaultPath}\n`);
+        } else {
+          process.stderr.write(`  Vault:        (not configured)\n`);
+        }
+        if (doctorFailures > 0) {
+          process.stderr.write(
+            `  Doctor:       ${doctorFailures} check(s) failed — run "claude-rca doctor" for details\n`,
+          );
+        } else {
+          process.stderr.write(`  Doctor:       all checks passed\n`);
         }
       } catch (err) {
         if (err instanceof RcaError) {
@@ -336,6 +493,8 @@ export function createProgram() {
     .description('Check environment: Node, claude, rg, git, vault')
     .action(async () => {
       const { execFileSync: execSync } = await import('node:child_process');
+      const { existsSync: fsExistsSync, readFileSync: fsReadFileSync } = await import('node:fs');
+      const { join: pathJoin } = await import('node:path');
       const checks = [];
       let failures = 0;
 
@@ -376,6 +535,25 @@ export function createProgram() {
       const maxName = Math.max(...checks.map((c) => c.name.length));
       for (const c of checks) {
         process.stdout.write(`${c.name.padEnd(maxName + 2)}${c.status.padEnd(6)}${c.detail}\n`);
+      }
+
+      // Non-fatal sentinel check: read .last-rca-error from output_dir
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        const sentinelPath = pathJoin(cfg.output_dir, '.last-rca-error');
+        if (fsExistsSync(sentinelPath)) {
+          try {
+            const s = JSON.parse(fsReadFileSync(sentinelPath, 'utf8'));
+            process.stdout.write(
+              `rca-gen  WARN  Last generation failed at ${s.timestamp} for ${s.ref}: ${s.error}\n`,
+            );
+          } catch {
+            process.stdout.write('rca-gen  WARN  Last generation failed (sentinel unreadable)\n');
+          }
+        }
+      } catch {
+        // Config load failure is non-fatal for the sentinel check
       }
 
       if (failures > 0) {

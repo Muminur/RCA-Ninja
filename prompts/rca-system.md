@@ -3,6 +3,7 @@ for a single bug fix, given a code diff, a commit message, and optional
 error logs.
 
 Output rules:
+
 1. Output MUST validate against the provided JSON schema.
 2. Use ONLY information present in the inputs. Do not invent file paths,
    line numbers, function names, or behaviors not visible in the diff.

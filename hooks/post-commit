@@ -17,7 +17,22 @@ MSG=$(git log -1 --pretty=%s)
 case "$MSG" in
   fix:*|fix\(*\):*)
     # Run in background so commit returns immediately.
-    nohup claude-rca generate --from HEAD >/dev/null 2>>"$(claude-rca config --get log.file 2>/dev/null || echo /tmp/claude-rca.log)" &
+    # On failure, write a sentinel file so `claude-rca doctor` and `recent` can warn the user.
+    (
+      LOG_FILE="$(claude-rca config --get log.file 2>/dev/null || echo /tmp/claude-rca.log)"
+      OUTPUT_DIR="$(claude-rca config --get output_dir 2>/dev/null || echo rca)"
+      if ! claude-rca generate --from HEAD >"${LOG_FILE}" 2>&1; then
+        LAST_LINE="$(tail -1 "${LOG_FILE}")"
+        ERROR_MSG="$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" -- "${LAST_LINE}")"
+        TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        REF="$(git rev-parse --short HEAD)"
+        printf '{"timestamp":"%s","ref":"%s","error":%s}\n' \
+          "${TIMESTAMP}" "${REF}" "${ERROR_MSG}" \
+          >"${OUTPUT_DIR}/.last-rca-error"
+      else
+        rm -f "${OUTPUT_DIR}/.last-rca-error"
+      fi
+    ) &
     disown 2>/dev/null || true
     ;;
   *)

@@ -79,6 +79,11 @@ export async function search({ outputDir, query, tag, since, json }) {
 }
 
 export function recent({ outputDir, count = 10, json = false }) {
+  const sentinelPath = join(outputDir, '.last-rca-error');
+  if (existsSync(sentinelPath)) {
+    process.stderr.write("⚠ Last RCA generation failed — run 'claude-rca doctor' for details\n");
+  }
+
   const allFiles = [];
   collectMdFiles(outputDir, allFiles);
   allFiles.sort((a, b) => b.mtime - a.mtime);

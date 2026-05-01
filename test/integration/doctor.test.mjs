@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -50,5 +52,60 @@ describe('doctor', () => {
       SystemRoot: process.env.SystemRoot || '',
     });
     assert.strictEqual(status, 70);
+  });
+
+  it('prints a WARN line when .last-rca-error sentinel exists in output_dir', () => {
+    // Create a tmpdir to serve as the output_dir with a sentinel file
+    const tmpDir = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-test-'));
+    const sentinelPath = join(tmpDir, '.last-rca-error');
+    const sentinelData = {
+      timestamp: '2026-04-30T12:00:00Z',
+      ref: 'abc1234',
+      error: 'CLAUDE_FAILURE: exit 21',
+    };
+    writeFileSync(sentinelPath, JSON.stringify(sentinelData), 'utf8');
+
+    // Write a minimal config pointing output_dir at our tmpDir
+    const configPath = join(tmpDir, '.claude-rca.json');
+    writeFileSync(configPath, JSON.stringify({ version: 1, output_dir: tmpDir }), 'utf8');
+
+    const result = spawnSync('node', [BIN, '--config', configPath, '--cwd', tmpDir, 'doctor'], {
+      encoding: 'utf8',
+      cwd: ROOT,
+    });
+
+    // Clean up
+    unlinkSync(sentinelPath);
+    unlinkSync(configPath);
+    rmdirSync(tmpDir);
+
+    assert.ok(
+      result.stdout.includes('WARN'),
+      `doctor stdout should include WARN but got:\n${result.stdout}`,
+    );
+    assert.ok(
+      result.stdout.includes('abc1234'),
+      `doctor stdout should include ref abc1234 but got:\n${result.stdout}`,
+    );
+  });
+
+  it('prints no WARN line when .last-rca-error sentinel is absent', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-test-'));
+    const configPath = join(tmpDir, '.claude-rca.json');
+    writeFileSync(configPath, JSON.stringify({ version: 1, output_dir: tmpDir }), 'utf8');
+
+    const result = spawnSync('node', [BIN, '--config', configPath, '--cwd', tmpDir, 'doctor'], {
+      encoding: 'utf8',
+      cwd: ROOT,
+    });
+
+    // Clean up
+    unlinkSync(configPath);
+    rmdirSync(tmpDir);
+
+    assert.ok(
+      !result.stdout.includes('rca-gen  WARN'),
+      `doctor stdout should NOT include WARN but got:\n${result.stdout}`,
+    );
   });
 });
