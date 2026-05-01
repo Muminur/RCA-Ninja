@@ -90,34 +90,36 @@ cd RCA-Ninja
 npm ci && npm link
 ```
 
-> **Prerequisites:** Node.js >= 20 · git >= 2.20 · [ripgrep](https://github.com/BurntSushi/ripgrep#installation) · [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`npm i -g @anthropic-ai/claude-code && claude login`) · [Anthropic API key](https://console.anthropic.com/settings/keys) (set `ANTHROPIC_API_KEY` in `.env`)
+> **Prerequisites:** Node.js >= 20 · git >= 2.20 · [ripgrep](https://github.com/BurntSushi/ripgrep#installation) · [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`npm i -g @anthropic-ai/claude-code && claude login`)
 >
-> **Important:** RCA generation uses `claude --bare` which requires an **Anthropic API key** (from [console.anthropic.com](https://console.anthropic.com/settings/keys)), not your Claude.ai login. Add it to your project's `.env` file — see [Quick Start](#quick-start) step 2.
+> RCA generation works with your Claude.ai OAuth login — no separate API key needed.
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Initialize in your repo (creates config + installs git hooks)
+# 1. Initialize in your repo (creates config + installs git hooks automatically)
 cd your-git-repo
 claude-rca init
 
-# 2. Set up your API key (REQUIRED for generation)
-cp .env.example .env
-# Edit .env → add your ANTHROPIC_API_KEY from https://console.anthropic.com/settings/keys
-# (Optional) Also add OBSIDIAN_API_KEY for vault sync
+# 2. Enable auto-generation + Obsidian sync
+claude-rca config --set auto_generate=true
 claude-rca config --set obsidian.enabled=true
 claude-rca config --set "obsidian.vault_path=/path/to/vault"
 
-# 3. Fix a bug and commit (hook auto-generates RCA in background)
+# 3. (Optional) Add Obsidian REST API key for richer sync
+cp .env.example .env    # then edit .env → add OBSIDIAN_API_KEY
+
+# 4. That's it! Every fix: commit auto-generates an RCA in the background
 git commit -m "fix: null-check session before dereferencing user.id"
-# → RCA generated automatically via post-commit hook
+# → RCA generated, synced to Obsidian vault, wikilink added to daily note
 
-# 4. Or generate manually
+# 5. Or generate manually for any commit
 claude-rca generate
+claude-rca generate --from HEAD~3
 
-# 5. Search your corpus later
+# 6. Search your corpus
 claude-rca search "null pointer"
 claude-rca recent 5
 claude-rca show RCA-2026-04-26-a3f2c1d-null-check-session

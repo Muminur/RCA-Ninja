@@ -289,35 +289,51 @@ function Invoke-Doctor {
 # ---------------------------------------------------------------------------
 function Invoke-ObsidianSetup {
     Write-Host ""
-    Write-Step "Optional: Obsidian REST API integration"
+    Write-Step "Optional: Obsidian vault sync"
 
-    $answer = Read-Host "  Would you like to set up Obsidian REST API integration? [y/N]"
+    $answer = Read-Host "  Would you like to set up Obsidian vault sync? [y/N]"
     if ($answer -notmatch '^[Yy]') {
-        Write-Info "Skipping Obsidian REST API setup."
+        Write-Info "Skipping Obsidian setup."
         return
     }
 
     Write-Host ""
-    Write-Info "To enable Obsidian integration, install the 'Local REST API' community plugin:"
-    Write-Host ""
-    Write-Host "    1. Open Obsidian -> Settings -> Community plugins"
-    Write-Host "    2. Click 'Browse' and search for 'Local REST API'"
-    Write-Host "    3. Install and enable the plugin"
-    Write-Host "    4. Copy the API key shown in the plugin settings"
+    Write-Info "For REST API sync, install 'Local REST API' plugin in Obsidian:"
+    Write-Host "    1. Obsidian -> Settings -> Community plugins -> Browse -> 'Local REST API'"
+    Write-Host "    2. Install, enable, and copy the API key from plugin settings"
     Write-Host ""
 
-    $apiKey = Read-Host "  Enter your Obsidian Local REST API key (leave blank to skip)"
+    $apiKey = Read-Host "  Enter your Obsidian REST API key (leave blank for filesystem-only sync)"
+    $vaultPath = Read-Host "  Enter your Obsidian vault path (e.g. C:\Users\You\Documents\My Vault)"
 
-    if ($apiKey -ne '') {
-        Write-Info "Saving API key..."
-        claude-rca config --set "obsidian.api_key=$apiKey"
+    # Write secrets to .env (gitignored), not .claude-rca.json
+    if ($apiKey -ne '' -or $vaultPath -ne '') {
+        $envExample = Join-Path $INSTALL_DIR '.env.example'
+        $targetEnv = Join-Path (Get-Location) '.env'
+        if (-not (Test-Path $targetEnv) -and (Test-Path $envExample)) {
+            Copy-Item $envExample $targetEnv
+            Write-Info "Created .env from template (gitignored)"
+        }
+        if ($apiKey -ne '') {
+            $envContent = if (Test-Path $targetEnv) { Get-Content $targetEnv -Raw } else { '' }
+            if ($envContent -match 'OBSIDIAN_API_KEY=') {
+                $envContent = $envContent -replace 'OBSIDIAN_API_KEY=.*', "OBSIDIAN_API_KEY=$apiKey"
+            } else {
+                $envContent += "`nOBSIDIAN_API_KEY=$apiKey`nOBSIDIAN_HOST=127.0.0.1`nOBSIDIAN_PORT=27124`n"
+            }
+            Set-Content -Path $targetEnv -Value $envContent -Encoding UTF8
+            Write-OK "API key saved to .env (not committed to git)"
+        }
     }
 
-    Write-Info "Enabling Obsidian integration..."
-    claude-rca config --set "obsidian.enabled=true"
-    claude-rca config --set "obsidian.api_port=27124"
+    if ($vaultPath -ne '') {
+        claude-rca config --set "obsidian.vault_path=$vaultPath"
+        Write-OK "Vault path set: $vaultPath"
+    }
 
-    Write-OK "Obsidian REST API integration configured (port 27124)"
+    claude-rca config --set "obsidian.enabled=true"
+    claude-rca config --set "auto_generate=true"
+    Write-OK "Obsidian sync enabled, auto-generate on fix: commits activated"
 }
 
 # ---------------------------------------------------------------------------
@@ -413,34 +429,23 @@ function Write-Success {
     Write-Host "       claude login"
 
     Write-Host ""
-    Write-Host "  2. Initialize claude-rca in any git repo:"
+    Write-Host "  2. Initialize claude-rca in your git repo:"
     Write-Host "       cd your-project"
-    Write-Host "       claude-rca init"
+    Write-Host "       claude-rca init          # creates config + installs git hooks"
 
     Write-Host ""
-    Write-Host "  3. Generate an RCA after a bug-fix commit:"
+    Write-Host "  3. That's it! Every fix: commit now auto-generates an RCA."
     Write-Host "       git commit -m `"fix: your fix message`""
-    Write-Host "       claude-rca generate"
+    Write-Host "       # RCA generated in background, synced to Obsidian"
 
     Write-Host ""
-    Write-Host "  4. (Optional) Install the auto-generate git hook:"
-    Write-Host "       & `"$INSTALL_DIR\hooks\install-hook.ps1`""
+    Write-Host "  Or generate manually:  claude-rca generate"
+    Write-Host "  Search your corpus:    claude-rca search `"null pointer`""
+    Write-Host "  Start MCP server:      claude-rca mcp-server"
+    Write-Host "  Check environment:     claude-rca doctor"
 
     Write-Host ""
-    Write-Host "  5. Set up Obsidian REST API (if not done above):"
-    Write-Host "       claude-rca config --set obsidian.api_key=YOUR_KEY"
-
-    Write-Host ""
-    Write-Host "  6. Start MCP server for Claude Desktop integration:"
-    Write-Host "       claude-rca mcp-server"
-
-    Write-Host ""
-    Write-Host "  7. Verify your environment at any time:"
-    Write-Host "       claude-rca doctor"
-
-    Write-Host ""
-    Write-Host "  Note: Native Windows support is experimental (WSL2 recommended)."
-    Write-Host "        See https://github.com/Muminur/RCA-Ninja for full docs."
+    Write-Host "  Docs: https://github.com/Muminur/RCA-Ninja"
     Write-Host ""
 }
 

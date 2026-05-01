@@ -303,36 +303,53 @@ setup_obsidian_api() {
   step "Optional: Obsidian REST API integration"
 
   local answer=""
-  read -rp "  Would you like to set up Obsidian REST API integration? [y/N] " answer
+  read -rp "  Would you like to set up Obsidian vault sync? [y/N] " answer
   answer="${answer:-N}"
 
   if [[ ! "$answer" =~ ^[Yy]$ ]]; then
-    info "Skipping Obsidian REST API setup."
+    info "Skipping Obsidian setup."
     return
   fi
 
   printf "\n"
-  info "To enable Obsidian integration, install the 'Local REST API' community plugin:"
-  printf "\n"
-  printf "    1. Open Obsidian → Settings → Community plugins\n"
-  printf "    2. Click 'Browse' and search for 'Local REST API'\n"
-  printf "    3. Install and enable the plugin\n"
-  printf "    4. Copy the API key shown in the plugin settings\n"
-  printf "\n"
+  info "For REST API sync, install the 'Local REST API' community plugin in Obsidian:"
+  printf "    1. Obsidian → Settings → Community plugins → Browse → 'Local REST API'\n"
+  printf "    2. Install, enable, and copy the API key from plugin settings\n\n"
 
   local api_key=""
-  read -rp "  Enter your Obsidian Local REST API key (leave blank to skip): " api_key
+  read -rp "  Enter your Obsidian REST API key (leave blank for filesystem-only sync): " api_key
 
-  if [[ -n "$api_key" ]]; then
-    info "Saving API key..."
-    claude-rca config --set "obsidian.api_key=${api_key}"
+  local vault_path=""
+  read -rp "  Enter your Obsidian vault path (e.g. ~/Documents/My Vault): " vault_path
+
+  # Write secrets to .env (gitignored), not .claude-rca.json
+  local env_file="${INSTALL_DIR}/.env.example"
+  if [[ -n "$api_key" || -n "$vault_path" ]]; then
+    local target_env="${PWD}/.env"
+    if [[ ! -f "$target_env" ]] && [[ -f "$env_file" ]]; then
+      cp "$env_file" "$target_env"
+      info "Created .env from template (gitignored — safe for secrets)"
+    fi
+    if [[ -n "$api_key" ]]; then
+      if [[ -f "$target_env" ]]; then
+        sed -i "s|^OBSIDIAN_API_KEY=.*|OBSIDIAN_API_KEY=${api_key}|" "$target_env" 2>/dev/null || \
+          printf "\nOBSIDIAN_API_KEY=${api_key}\n" >> "$target_env"
+      else
+        printf "OBSIDIAN_API_KEY=${api_key}\nOBSIDIAN_HOST=127.0.0.1\nOBSIDIAN_PORT=27124\n" > "$target_env"
+      fi
+      success "API key saved to .env (not committed to git)"
+    fi
   fi
 
-  info "Enabling Obsidian integration..."
-  claude-rca config --set "obsidian.enabled=true"
-  claude-rca config --set "obsidian.api_port=27124"
+  if [[ -n "$vault_path" ]]; then
+    vault_path="${vault_path/#\~/$HOME}"
+    claude-rca config --set "obsidian.vault_path=${vault_path}" 2>/dev/null
+    success "Vault path set: ${vault_path}"
+  fi
 
-  success "Obsidian REST API integration configured (port 27124)"
+  claude-rca config --set "obsidian.enabled=true" 2>/dev/null
+  claude-rca config --set "auto_generate=true" 2>/dev/null
+  success "Obsidian sync enabled, auto-generate on fix: commits activated"
 }
 
 # ---------------------------------------------------------------------------
@@ -460,20 +477,16 @@ print_success() {
   printf "${BOLD}Next steps:${RESET}\n\n"
   printf "  1. Authenticate with Claude (if you haven't already):\n"
   printf "       claude login\n\n"
-  printf "  2. Initialize claude-rca in any git repo:\n"
+  printf "  2. Initialize claude-rca in your git repo:\n"
   printf "       cd your-project\n"
-  printf "       claude-rca init\n\n"
-  printf "  3. Generate an RCA after a bug-fix commit:\n"
+  printf "       claude-rca init          ${CYAN}# creates config + installs git hooks${RESET}\n\n"
+  printf "  3. That's it! Every ${BOLD}fix:${RESET} commit now auto-generates an RCA.\n"
   printf "       git commit -m \"fix: your fix message\"\n"
-  printf "       claude-rca generate\n\n"
-  printf "  4. (Optional) Install the auto-generate git hook:\n"
-  printf "       bash ${INSTALL_DIR}/hooks/install-hook.sh\n\n"
-  printf "  5. Set up Obsidian REST API (if not done above):\n"
-  printf "       claude-rca config --set obsidian.api_key=YOUR_KEY\n\n"
-  printf "  6. Start MCP server for Claude Desktop integration:\n"
-  printf "       claude-rca mcp-server\n\n"
-  printf "  7. Verify your environment at any time:\n"
-  printf "       claude-rca doctor\n\n"
+  printf "       ${CYAN}# → RCA generated in background, synced to Obsidian${RESET}\n\n"
+  printf "  Or generate manually:  claude-rca generate\n"
+  printf "  Search your corpus:    claude-rca search \"null pointer\"\n"
+  printf "  Start MCP server:      claude-rca mcp-server\n"
+  printf "  Check environment:     claude-rca doctor\n\n"
   printf "  Docs: https://github.com/Muminur/RCA-Ninja\n\n"
 }
 
