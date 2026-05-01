@@ -1,0 +1,138 @@
+import { request } from 'node:https';
+import { request as httpRequest } from 'node:http';
+import { RcaError } from './errors.mjs';
+
+export function createObsidianClient({
+  apiKey,
+  host = '127.0.0.1',
+  port = 27124,
+  protocol = 'https',
+}) {
+  if (!apiKey) {
+    throw new RcaError('INTERNAL', { message: 'Obsidian API key is required' });
+  }
+
+  const requester = protocol === 'https' ? request : httpRequest;
+
+  function apiRequest(method, path, { body, contentType = 'text/markdown', query } = {}) {
+    return new Promise((resolve, reject) => {
+      const queryString = query
+        ? '?' +
+          Object.entries(query)
+            .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+            .join('&')
+        : '';
+
+      const options = {
+        hostname: host,
+        port,
+        path: path + queryString,
+        method,
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: 'application/json',
+        },
+        rejectAuthorized: false,
+      };
+
+      if (body != null) {
+        const payload = typeof body === 'string' ? body : JSON.stringify(body);
+        options.headers['Content-Type'] =
+          typeof body === 'string' ? contentType : 'application/json';
+        options.headers['Content-Length'] = Buffer.byteLength(payload);
+      }
+
+      const req = requester(options, (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8');
+          if (res.statusCode >= 400) {
+            reject(
+              new RcaError('INTERNAL', {
+                message: `Obsidian API ${method} ${path} returned ${res.statusCode}: ${raw.slice(0, 200)}`,
+              }),
+            );
+            return;
+          }
+          try {
+            resolve(raw ? JSON.parse(raw) : null);
+          } catch {
+            resolve(raw);
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        reject(
+          new RcaError('INTERNAL', {
+            message: `Obsidian API connection failed: ${err.message}. Is Obsidian running with Local REST API plugin?`,
+          }),
+        );
+      });
+
+      if (body != null) {
+        req.write(typeof body === 'string' ? body : JSON.stringify(body));
+      }
+      req.end();
+    });
+  }
+
+  return {
+    async searchVault(query) {
+      return apiRequest('POST', '/search/simple/', { query: { query } });
+    },
+
+    async readNote(path) {
+      return apiRequest('GET', `/vault/${encodeURIComponent(path)}`);
+    },
+
+    async createNote(path, content) {
+      return apiRequest('PUT', `/vault/${encodeURIComponent(path)}`, {
+        body: content,
+        contentType: 'text/markdown',
+      });
+    },
+
+    async patchNote(path, content, { heading, prepend = false } = {}) {
+      const headers = {};
+      if (heading) {
+        headers['Target-Type'] = 'heading';
+        headers['Target'] = heading;
+      }
+      headers.Operation = prepend ? 'prepend' : 'append';
+
+      return apiRequest('PATCH', `/vault/${encodeURIComponent(path)}`, {
+        body: content,
+        contentType: 'text/markdown',
+      });
+    },
+
+    async appendNote(path, content) {
+      return apiRequest('POST', `/vault/${encodeURIComponent(path)}`, {
+        body: content,
+        contentType: 'text/markdown',
+      });
+    },
+
+    async deleteNote(path) {
+      return apiRequest('DELETE', `/vault/${encodeURIComponent(path)}`);
+    },
+
+    async listFolder(folderPath = '/') {
+      return apiRequest('GET', `/vault/${encodeURIComponent(folderPath)}`);
+    },
+
+    async listVaultRoot() {
+      return apiRequest('GET', '/vault/');
+    },
+
+    async getStatus() {
+      return apiRequest('GET', '/');
+    },
+
+    async openNote(path) {
+      return apiRequest('POST', `/open/${encodeURIComponent(path)}`);
+    },
+  };
+}

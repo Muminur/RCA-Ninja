@@ -394,6 +394,15 @@ export function createProgram() {
       }
     });
 
+  program
+    .command('mcp-server')
+    .description('Start the MCP (Model Context Protocol) server for Claude integration')
+    .action(async () => {
+      const { startMcpServer } = await import('./mcp-server.mjs');
+      const cwd = program.opts().cwd || process.cwd();
+      await startMcpServer({ cwd });
+    });
+
   return program;
 }
 

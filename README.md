@@ -164,10 +164,31 @@ graph TB
         M[claude-rca show] -->|resolve ID| I
     end
 
+    subgraph "MCP Server"
+        N[claude-rca mcp-server] --> O[rca_generate]
+        N --> P[rca_search]
+        N --> Q[rca_recent]
+        N --> R[rca_show]
+        N --> S[obsidian_search]
+        N --> T[obsidian_read_note]
+        N --> U[obsidian_create_note]
+        N --> V[obsidian_patch_note]
+        N --> W[obsidian_list_folder]
+        N --> AA[rca_sync_to_vault]
+        N --> AB[rca_link_daily_note]
+        O -->|delegates| D
+        P -->|delegates| K
+        Q -->|delegates| L
+        R -->|delegates| M
+        AA -->|REST API or file copy| J
+        AB -->|REST API or appendFileSync| J
+    end
+
     style E fill:#6366f1,color:#fff
     style I fill:#22c55e,color:#fff
     style X fill:#ef4444,color:#fff
     style J fill:#8b5cf6,color:#fff
+    style N fill:#f59e0b,color:#fff
 ```
 
 ### Module Map
@@ -497,6 +518,83 @@ graph TB
 | Search across 1k RCAs              | < 500 ms | ~200 ms         |
 | Search across 10k RCAs             | < 2 s    | ~1.2 s          |
 | Memory RSS                         | < 100 MB | ~40 MB          |
+
+---
+
+## MCP Server (Claude Integration)
+
+RCA-Ninja includes a built-in MCP (Model Context Protocol) server that lets Claude Desktop and Claude Code interact directly with your RCA corpus and Obsidian vault.
+
+### Start the MCP server
+
+```bash
+claude-rca mcp-server
+```
+
+### Configure Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "claude-rca": {
+      "command": "claude-rca",
+      "args": ["mcp-server"]
+    }
+  }
+}
+```
+
+### Available MCP Tools
+
+| Tool                   | Description                                   |
+| ---------------------- | --------------------------------------------- |
+| `rca_generate`         | Generate an RCA for a commit ref              |
+| `rca_search`           | Search RCA corpus via ripgrep                 |
+| `rca_recent`           | List N most recent RCAs                       |
+| `rca_show`             | Read a specific RCA by ID/hash                |
+| `obsidian_search`      | Full-text search via Obsidian REST API        |
+| `obsidian_read_note`   | Read any note from the vault                  |
+| `obsidian_create_note` | Create a note in the vault                    |
+| `obsidian_patch_note`  | Insert content at a heading/block             |
+| `obsidian_list_folder` | List files in a vault folder                  |
+| `rca_sync_to_vault`    | Push an RCA to vault (REST API or filesystem) |
+| `rca_link_daily_note`  | Append wikilink to today's daily note         |
+
+The RCA tools work without Obsidian. The `obsidian_*` tools require the [Local REST API plugin](https://github.com/coddingtonbear/obsidian-local-rest-api).
+
+---
+
+## Obsidian REST API Integration
+
+For richer Obsidian integration beyond filesystem copy, configure the [Local REST API plugin](https://github.com/coddingtonbear/obsidian-local-rest-api):
+
+### Setup
+
+1. Install the "Local REST API" community plugin in Obsidian
+2. Enable it in Settings → Community Plugins
+3. Copy the API key from Settings → Local REST API
+4. Configure RCA-Ninja:
+
+```bash
+claude-rca config --set obsidian.api_key=your-api-key-here
+claude-rca config --set obsidian.api_host=127.0.0.1
+claude-rca config --set obsidian.api_port=27124
+```
+
+### What changes with the REST API
+
+| Feature               | Filesystem (default) | REST API         |
+| --------------------- | -------------------- | ---------------- |
+| Sync RCA to vault     | File copy            | HTTP PUT         |
+| Daily note append     | appendFileSync       | HTTP PATCH       |
+| Search vault          | ripgrep on files     | Obsidian's index |
+| Remote vaults         | Not supported        | Supported        |
+| Obsidian must be open | No                   | Yes              |
 
 ---
 

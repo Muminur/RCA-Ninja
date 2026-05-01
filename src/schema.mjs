@@ -34,6 +34,10 @@ const CONFIG_SCHEMA = {
         daily_note_format: { type: 'string', default: 'YYYY-MM-DD' },
         daily_notes_folder: { type: 'string', default: 'Daily Notes' },
         open_on_create: { type: 'boolean', default: false },
+        api_key: { type: 'string', default: '' },
+        api_host: { type: 'string', default: '127.0.0.1' },
+        api_port: { type: 'integer', minimum: 1, maximum: 65535, default: 27124 },
+        api_protocol: { enum: ['https', 'http'], default: 'https' },
       },
     },
     naming: {
