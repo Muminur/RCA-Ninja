@@ -90,7 +90,9 @@ cd RCA-Ninja
 npm ci && npm link
 ```
 
-> **Prerequisites:** Node.js >= 20 · git >= 2.20 · [ripgrep](https://github.com/BurntSushi/ripgrep#installation) · [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`npm i -g @anthropic-ai/claude-code && claude login`)
+> **Prerequisites:** Node.js >= 20 · git >= 2.20 · [ripgrep](https://github.com/BurntSushi/ripgrep#installation) · [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`npm i -g @anthropic-ai/claude-code && claude login`) · [Anthropic API key](https://console.anthropic.com/settings/keys) (set `ANTHROPIC_API_KEY` in `.env`)
+>
+> **Important:** RCA generation uses `claude --bare` which requires an **Anthropic API key** (from [console.anthropic.com](https://console.anthropic.com/settings/keys)), not your Claude.ai login. Add it to your project's `.env` file — see [Quick Start](#quick-start) step 2.
 
 ---
 
@@ -101,9 +103,10 @@ npm ci && npm link
 cd your-git-repo
 claude-rca init
 
-# 2. (Optional) Set up Obsidian sync — create .env from template
+# 2. Set up your API key (REQUIRED for generation)
 cp .env.example .env
-# Edit .env → add your OBSIDIAN_API_KEY from Obsidian Settings → Local REST API
+# Edit .env → add your ANTHROPIC_API_KEY from https://console.anthropic.com/settings/keys
+# (Optional) Also add OBSIDIAN_API_KEY for vault sync
 claude-rca config --set obsidian.enabled=true
 claude-rca config --set "obsidian.vault_path=/path/to/vault"
 
