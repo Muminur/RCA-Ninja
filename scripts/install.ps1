@@ -285,6 +285,119 @@ function Invoke-Doctor {
 }
 
 # ---------------------------------------------------------------------------
+# Optional: Obsidian REST API integration setup
+# ---------------------------------------------------------------------------
+function Invoke-ObsidianSetup {
+    Write-Host ""
+    Write-Step "Optional: Obsidian REST API integration"
+
+    $answer = Read-Host "  Would you like to set up Obsidian REST API integration? [y/N]"
+    if ($answer -notmatch '^[Yy]') {
+        Write-Info "Skipping Obsidian REST API setup."
+        return
+    }
+
+    Write-Host ""
+    Write-Info "To enable Obsidian integration, install the 'Local REST API' community plugin:"
+    Write-Host ""
+    Write-Host "    1. Open Obsidian -> Settings -> Community plugins"
+    Write-Host "    2. Click 'Browse' and search for 'Local REST API'"
+    Write-Host "    3. Install and enable the plugin"
+    Write-Host "    4. Copy the API key shown in the plugin settings"
+    Write-Host ""
+
+    $apiKey = Read-Host "  Enter your Obsidian Local REST API key (leave blank to skip)"
+
+    if ($apiKey -ne '') {
+        Write-Info "Saving API key..."
+        claude-rca config --set "obsidian.api_key=$apiKey"
+    }
+
+    Write-Info "Enabling Obsidian integration..."
+    claude-rca config --set "obsidian.enabled=true"
+    claude-rca config --set "obsidian.api_port=27124"
+
+    Write-OK "Obsidian REST API integration configured (port 27124)"
+}
+
+# ---------------------------------------------------------------------------
+# Optional: MCP server setup
+# ---------------------------------------------------------------------------
+function Invoke-McpSetup {
+    Write-Host ""
+    Write-Step "Optional: MCP server configuration"
+
+    Write-Info "claude-rca ships an MCP server that exposes RCA tools to Claude Desktop."
+    Write-Host "  Run it with: claude-rca mcp-server"
+    Write-Host ""
+
+    # Detect Claude Desktop config location on Windows
+    $configPath = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
+
+    $manualInstructions = @"
+
+  To add the MCP server manually, merge this into your Claude Desktop config:
+  $configPath
+
+  {
+    "mcpServers": {
+      "claude-rca": {
+        "command": "claude-rca",
+        "args": ["mcp-server"]
+      }
+    }
+  }
+
+"@
+
+    if (-not (Test-Path $configPath)) {
+        Write-Info "Claude Desktop config not found at expected path."
+        Write-Host $manualInstructions
+        return
+    }
+
+    Write-Info "Found Claude Desktop config at: $configPath"
+    $answer = Read-Host "  Would you like to add the claude-rca MCP server to Claude Desktop? [y/N]"
+    if ($answer -notmatch '^[Yy]') {
+        Write-Host $manualInstructions
+        return
+    }
+
+    # Merge the mcpServers.claude-rca entry using PowerShell JSON manipulation
+    try {
+        $raw = Get-Content -Path $configPath -Raw -Encoding UTF8
+        $cfg = $raw | ConvertFrom-Json
+
+        # Ensure mcpServers property exists
+        if (-not ($cfg.PSObject.Properties['mcpServers'])) {
+            $cfg | Add-Member -MemberType NoteProperty -Name 'mcpServers' -Value ([PSCustomObject]@{})
+        }
+
+        # Add or overwrite the claude-rca entry
+        $entry = [PSCustomObject]@{
+            command = 'claude-rca'
+            args    = @('mcp-server')
+        }
+        if ($cfg.mcpServers.PSObject.Properties['claude-rca']) {
+            $cfg.mcpServers.'claude-rca' = $entry
+        } else {
+            $cfg.mcpServers | Add-Member -MemberType NoteProperty -Name 'claude-rca' -Value $entry
+        }
+
+        $updated = $cfg | ConvertTo-Json -Depth 10
+        $tmpPath = $configPath + '.tmp'
+        Set-Content -Path $tmpPath -Value $updated -Encoding UTF8
+        Move-Item -Path $tmpPath -Destination $configPath -Force
+
+        Write-OK "MCP server added to Claude Desktop config"
+        Write-Info "Restart Claude Desktop to load the new MCP server."
+    } catch {
+        Write-Warn "Could not automatically update the config: $_"
+        Write-Host $manualInstructions
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Success message
 # ---------------------------------------------------------------------------
 function Write-Success {
@@ -310,7 +423,19 @@ function Write-Success {
     Write-Host "       claude-rca generate"
 
     Write-Host ""
-    Write-Host "  4. Verify your environment at any time:"
+    Write-Host "  4. (Optional) Install the auto-generate git hook:"
+    Write-Host "       & `"$INSTALL_DIR\hooks\install-hook.ps1`""
+
+    Write-Host ""
+    Write-Host "  5. Set up Obsidian REST API (if not done above):"
+    Write-Host "       claude-rca config --set obsidian.api_key=YOUR_KEY"
+
+    Write-Host ""
+    Write-Host "  6. Start MCP server for Claude Desktop integration:"
+    Write-Host "       claude-rca mcp-server"
+
+    Write-Host ""
+    Write-Host "  7. Verify your environment at any time:"
     Write-Host "       claude-rca doctor"
 
     Write-Host ""
@@ -331,6 +456,8 @@ function Main {
     Invoke-Clone
     Invoke-NpmInstall
     Invoke-Doctor
+    Invoke-ObsidianSetup
+    Invoke-McpSetup
     Write-Success
 }
 

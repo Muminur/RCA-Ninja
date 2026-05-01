@@ -4,6 +4,26 @@ import { homedir } from 'node:os';
 import { validateConfig, VALID_KEYS } from './schema.mjs';
 import { RcaError } from './errors.mjs';
 
+function loadDotenv(dir) {
+  const envPath = join(dir, '.env');
+  if (!existsSync(envPath)) return;
+  const content = readFileSync(envPath, 'utf8');
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    let val = trimmed.slice(eqIdx + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (!process.env[key]) {
+      process.env[key] = val;
+    }
+  }
+}
+
 export const DEFAULTS = {
   version: 1,
   output_dir: './rca',
@@ -47,6 +67,8 @@ function tryLoadJson(path) {
 }
 
 export function loadConfig({ cwd = process.cwd(), configPath = null } = {}) {
+  loadDotenv(cwd);
+
   const sources = [];
 
   sources.push(DEFAULTS);
@@ -78,6 +100,19 @@ export function loadConfig({ cwd = process.cwd(), configPath = null } = {}) {
 
   if (data.output_dir) {
     data.output_dir = resolve(cwd, data.output_dir);
+  }
+
+  if (process.env.OBSIDIAN_API_KEY) {
+    if (!data.obsidian) data.obsidian = {};
+    data.obsidian.api_key = process.env.OBSIDIAN_API_KEY;
+  }
+  if (process.env.OBSIDIAN_HOST) {
+    if (!data.obsidian) data.obsidian = {};
+    data.obsidian.api_host = process.env.OBSIDIAN_HOST;
+  }
+  if (process.env.OBSIDIAN_PORT) {
+    if (!data.obsidian) data.obsidian = {};
+    data.obsidian.api_port = parseInt(process.env.OBSIDIAN_PORT, 10);
   }
 
   return data;

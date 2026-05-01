@@ -296,6 +296,158 @@ run_doctor() {
 }
 
 # ---------------------------------------------------------------------------
+# Optional: Obsidian REST API integration setup
+# ---------------------------------------------------------------------------
+setup_obsidian_api() {
+  printf "\n"
+  step "Optional: Obsidian REST API integration"
+
+  local answer=""
+  read -rp "  Would you like to set up Obsidian REST API integration? [y/N] " answer
+  answer="${answer:-N}"
+
+  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+    info "Skipping Obsidian REST API setup."
+    return
+  fi
+
+  printf "\n"
+  info "To enable Obsidian integration, install the 'Local REST API' community plugin:"
+  printf "\n"
+  printf "    1. Open Obsidian → Settings → Community plugins\n"
+  printf "    2. Click 'Browse' and search for 'Local REST API'\n"
+  printf "    3. Install and enable the plugin\n"
+  printf "    4. Copy the API key shown in the plugin settings\n"
+  printf "\n"
+
+  local api_key=""
+  read -rp "  Enter your Obsidian Local REST API key (leave blank to skip): " api_key
+
+  if [[ -n "$api_key" ]]; then
+    info "Saving API key..."
+    claude-rca config --set "obsidian.api_key=${api_key}"
+  fi
+
+  info "Enabling Obsidian integration..."
+  claude-rca config --set "obsidian.enabled=true"
+  claude-rca config --set "obsidian.api_port=27124"
+
+  success "Obsidian REST API integration configured (port 27124)"
+}
+
+# ---------------------------------------------------------------------------
+# Optional: MCP server setup
+# ---------------------------------------------------------------------------
+setup_mcp() {
+  printf "\n"
+  step "Optional: MCP server configuration"
+
+  info "claude-rca ships an MCP server that exposes RCA tools to Claude Desktop."
+  printf "  Run it with: claude-rca mcp-server\n\n"
+
+  # Detect Claude Desktop config location
+  local config_path=""
+  if [[ "$OS" == "macos" ]]; then
+    config_path="${HOME}/Library/Application Support/Claude/claude_desktop_config.json"
+  else
+    config_path="${HOME}/.config/Claude/claude_desktop_config.json"
+  fi
+
+  if [[ ! -f "$config_path" ]]; then
+    info "Claude Desktop config not found at expected path."
+    printf "\n${BOLD}To add the MCP server manually, merge this into your Claude Desktop config:${RESET}\n\n"
+    printf '    {\n'
+    printf '      "mcpServers": {\n'
+    printf '        "claude-rca": {\n'
+    printf '          "command": "claude-rca",\n'
+    printf '          "args": ["mcp-server"]\n'
+    printf '        }\n'
+    printf '      }\n'
+    printf '    }\n\n'
+    return
+  fi
+
+  info "Found Claude Desktop config at: ${config_path}"
+  local answer=""
+  read -rp "  Would you like to add the claude-rca MCP server to Claude Desktop? [y/N] " answer
+  answer="${answer:-N}"
+
+  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+    printf "\n${BOLD}To add the MCP server manually, merge this into:${RESET}\n  ${config_path}\n\n"
+    printf '    {\n'
+    printf '      "mcpServers": {\n'
+    printf '        "claude-rca": {\n'
+    printf '          "command": "claude-rca",\n'
+    printf '          "args": ["mcp-server"]\n'
+    printf '        }\n'
+    printf '      }\n'
+    printf '    }\n\n'
+    return
+  fi
+
+  # Merge mcpServers.claude-rca into the existing JSON config using python3 or node
+  local merge_script='
+import json, sys, os
+
+config_path = sys.argv[1]
+with open(config_path, "r") as f:
+    cfg = json.load(f)
+
+cfg.setdefault("mcpServers", {})
+cfg["mcpServers"]["claude-rca"] = {
+    "command": "claude-rca",
+    "args": ["mcp-server"]
+}
+
+tmp_path = config_path + ".tmp"
+with open(tmp_path, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+os.replace(tmp_path, config_path)
+print("OK")
+'
+
+  local merged=false
+
+  if command -v python3 &>/dev/null; then
+    if python3 -c "$merge_script" "$config_path" 2>/dev/null; then
+      merged=true
+    fi
+  fi
+
+  if [[ "$merged" != true ]] && command -v node &>/dev/null; then
+    local node_script='
+const fs = require("fs");
+const path = process.argv[2];
+const cfg = JSON.parse(fs.readFileSync(path, "utf8"));
+cfg.mcpServers = cfg.mcpServers || {};
+cfg.mcpServers["claude-rca"] = { command: "claude-rca", args: ["mcp-server"] };
+const tmp = path + ".tmp";
+fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
+fs.renameSync(tmp, path);
+console.log("OK");
+'
+    if node -e "$node_script" "$config_path" 2>/dev/null; then
+      merged=true
+    fi
+  fi
+
+  if [[ "$merged" == true ]]; then
+    success "MCP server added to Claude Desktop config"
+    info "Restart Claude Desktop to load the new MCP server."
+  else
+    warn "Could not automatically update the config (no python3 or node available)."
+    printf "\n${BOLD}Add this manually to:${RESET}\n  ${config_path}\n\n"
+    printf '    "mcpServers": {\n'
+    printf '      "claude-rca": {\n'
+    printf '        "command": "claude-rca",\n'
+    printf '        "args": ["mcp-server"]\n'
+    printf '      }\n'
+    printf '    }\n\n'
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Final success message
 # ---------------------------------------------------------------------------
 print_success() {
@@ -316,7 +468,11 @@ print_success() {
   printf "       claude-rca generate\n\n"
   printf "  4. (Optional) Install the auto-generate git hook:\n"
   printf "       bash ${INSTALL_DIR}/hooks/install-hook.sh\n\n"
-  printf "  5. Verify your environment at any time:\n"
+  printf "  5. Set up Obsidian REST API (if not done above):\n"
+  printf "       claude-rca config --set obsidian.api_key=YOUR_KEY\n\n"
+  printf "  6. Start MCP server for Claude Desktop integration:\n"
+  printf "       claude-rca mcp-server\n\n"
+  printf "  7. Verify your environment at any time:\n"
   printf "       claude-rca doctor\n\n"
   printf "  Docs: https://github.com/Muminur/RCA-Ninja\n\n"
 }
@@ -334,6 +490,8 @@ main() {
   clone_repo
   install_npm
   run_doctor
+  setup_obsidian_api
+  setup_mcp
   print_success
 }
 

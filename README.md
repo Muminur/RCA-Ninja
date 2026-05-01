@@ -1,8 +1,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?logo=nodedotjs&logoColor=white" alt="Node.js >= 20" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" />
-  <img src="https://img.shields.io/badge/tests-203%20passed-brightgreen" alt="203 Tests" />
-  <img src="https://img.shields.io/badge/coverage-88.17%25-brightgreen" alt="88.17% Coverage" />
+  <img src="https://img.shields.io/badge/tests-220%20passed-brightgreen" alt="220 Tests" />
+  <img src="https://img.shields.io/badge/coverage-86.57%25-brightgreen" alt="86.57% Coverage" />
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="v0.1.0" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Cross-platform" />
 </p>
@@ -208,6 +208,8 @@ claude-rca/
 │   ├── search.mjs          # ripgrep-backed full-text search
 │   ├── slug.mjs            # Deterministic URL-safe slug generation
 │   ├── writer.mjs          # Atomic file writer with collision handling
+│   ├── obsidian-api.mjs    # REST API client for Obsidian Local REST API
+│   ├── mcp-server.mjs      # MCP protocol server (11 tools)
 │   └── util/
 │       ├── exec.mjs        # Safe spawn wrapper (no shell)
 │       ├── fs.mjs          # atomicWrite, acquireLock, releaseLock
@@ -222,7 +224,8 @@ claude-rca/
 ├── scripts/
 │   ├── install.sh          # macOS/Linux one-line installer
 │   └── install.ps1         # Windows PowerShell installer
-└── test/                   # 203 tests (unit + integration + e2e)
+├── .env.example            # Template for Obsidian API credentials
+└── test/                   # 220 tests (unit + integration + e2e)
 ```
 
 ---
@@ -299,6 +302,8 @@ All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
 | `claude-rca show <id>`      | Display an RCA by filename, hash, or path             |
 | `claude-rca config`         | Read/write configuration values                       |
 | `claude-rca doctor`         | Verify environment (Node, git, rg, claude)            |
+| `claude-rca obsidian sync`  | Sync an RCA file to the Obsidian vault                |
+| `claude-rca mcp-server`     | Start the MCP server for Claude Desktop/Code          |
 
 ### Generate Options
 
@@ -353,10 +358,18 @@ claude-rca config --set <key>=<value>       # Write a value
     "enabled": false,
     "vault_path": "",
     "target_folder": "RCA Inbox",
-    "update_daily_note": true
+    "update_daily_note": true,
+    "api_host": "127.0.0.1",
+    "api_port": 27124
   },
   "log_level": "info"
 }
+```
+
+> **Secrets go in `.env`, not config.** The Obsidian API key is loaded from environment variables — never store it in `.claude-rca.json`. See [Obsidian REST API Integration](#obsidian-rest-api-integration) for setup.
+
+```
+
 ```
 
 ### Configuration Hierarchy
@@ -571,41 +584,63 @@ The RCA tools work without Obsidian. The `obsidian_*` tools require the [Local R
 
 ## Obsidian REST API Integration
 
-For richer Obsidian integration beyond filesystem copy, configure the [Local REST API plugin](https://github.com/coddingtonbear/obsidian-local-rest-api):
+For richer Obsidian integration beyond filesystem copy, RCA-Ninja connects to the [Local REST API plugin](https://github.com/coddingtonbear/obsidian-local-rest-api) — giving you vault search, remote access, and PATCH-based daily note updates.
 
-### Setup
+### Setup (3 steps)
 
-1. Install the "Local REST API" community plugin in Obsidian
-2. Enable it in Settings → Community Plugins
-3. Copy the API key from Settings → Local REST API
-4. Configure RCA-Ninja:
+**Step 1:** Install the "Local REST API" community plugin in Obsidian (Settings → Community Plugins → Browse → search "Local REST API" → Install → Enable)
+
+**Step 2:** Copy your API key from Settings → Local REST API
+
+**Step 3:** Create a `.env` file in your project root (never committed — already in `.gitignore`):
 
 ```bash
-claude-rca config --set obsidian.api_key=your-api-key-here
-claude-rca config --set obsidian.api_host=127.0.0.1
-claude-rca config --set obsidian.api_port=27124
+# Copy the template
+cp .env.example .env
+
+# Edit with your API key
 ```
+
+```env
+# .env
+OBSIDIAN_API_KEY=your-api-key-here
+OBSIDIAN_HOST=127.0.0.1
+OBSIDIAN_PORT=27124
+```
+
+That's it. RCA-Ninja automatically reads `.env` on startup — no `config --set` needed for secrets.
+
+> **Security:** The `.env` file is gitignored. The API key is loaded via environment variable, never stored in `.claude-rca.json`. You can also export `OBSIDIAN_API_KEY` in your shell profile instead of using `.env`.
+
+### Environment Variables
+
+| Variable           | Default     | Description                    |
+| ------------------ | ----------- | ------------------------------ |
+| `OBSIDIAN_API_KEY` | —           | Bearer token for REST API auth |
+| `OBSIDIAN_HOST`    | `127.0.0.1` | Obsidian REST API host         |
+| `OBSIDIAN_PORT`    | `27124`     | Obsidian REST API port         |
 
 ### What changes with the REST API
 
-| Feature               | Filesystem (default) | REST API         |
-| --------------------- | -------------------- | ---------------- |
-| Sync RCA to vault     | File copy            | HTTP PUT         |
-| Daily note append     | appendFileSync       | HTTP PATCH       |
-| Search vault          | ripgrep on files     | Obsidian's index |
-| Remote vaults         | Not supported        | Supported        |
-| Obsidian must be open | No                   | Yes              |
+| Feature               | Filesystem (default) | REST API              |
+| --------------------- | -------------------- | --------------------- |
+| Sync RCA to vault     | File copy            | HTTP PUT via REST API |
+| Daily note append     | appendFileSync       | HTTP PATCH            |
+| Search vault          | ripgrep on files     | Obsidian's full index |
+| Remote vaults         | Not supported        | Supported             |
+| Obsidian must be open | No                   | Yes                   |
+| Credentials           | N/A                  | `.env` file           |
 
 ---
 
 ## Development
 
 ```bash
-npm test                  # unit tests (116 tests)
-npm run test:integration  # integration tests (72 tests)
+npm test                  # unit tests (129 tests)
+npm run test:integration  # integration tests (76 tests)
 npm run test:e2e          # e2e tests with claude-stub (15 tests)
 npm run coverage          # c8 report (target ≥85%)
-npm run check             # lint + typecheck + test + coverage gate
+npm run check             # lint + typecheck + test + coverage gate (220 total)
 npm run lint              # eslint + prettier
 npm run format            # auto-format with prettier
 ```
