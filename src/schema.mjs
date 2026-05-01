@@ -56,6 +56,15 @@ const CONFIG_SCHEMA = {
         file: { type: 'string', default: '' },
       },
     },
+    webhooks: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        enabled: { type: 'boolean', default: false },
+        url: { type: 'string', default: '' },
+        format: { enum: ['slack', 'discord', 'generic'], default: 'generic' },
+      },
+    },
   },
   required: ['version'],
 };
