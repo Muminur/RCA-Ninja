@@ -125,4 +125,35 @@ describe('renderer', () => {
     const snapshot = rfs(join(__dirname_fixtures, 'canonical-rca.md'), 'utf8');
     assert.strictEqual(md, snapshot, 'Rendered RCA must match snapshot file');
   });
+
+  it('includes bug_introduced_by in frontmatter when context provides it', () => {
+    const ctx = {
+      short_hash: 'a3f2c1d',
+      branch: 'main',
+      timestamp_utc: '2026-04-25T14:22:00Z',
+      bug_introduced_by: {
+        commit: 'ca9a812',
+        author: 'Jane Dev',
+        date: '2026-01-15T10:00:00+00:00',
+      },
+    };
+    const md = renderRca(fixture, ctx);
+    const parsed = matter(md);
+    assert.strictEqual(
+      parsed.data.bug_introduced_by,
+      'ca9a812 by Jane Dev on 2026-01-15',
+      'bug_introduced_by should be in frontmatter in correct format',
+    );
+  });
+
+  it('omits bug_introduced_by from frontmatter when context does not provide it', () => {
+    const ctx = {
+      short_hash: 'a3f2c1d',
+      branch: 'main',
+      timestamp_utc: '2026-04-25T14:22:00Z',
+      bug_introduced_by: null,
+    };
+    const md = renderRca(fixture, ctx);
+    assert.ok(!md.includes('bug_introduced_by'), 'should not include bug_introduced_by when null');
+  });
 });

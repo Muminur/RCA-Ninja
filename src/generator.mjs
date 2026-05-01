@@ -96,27 +96,45 @@ export async function generate({ context, config, systemPromptPath, schemaPath }
               rcaData[f] = typeof rcaData[f] === 'string' ? [rcaData[f]] : [];
             }
           }
-          if (!rcaData.files || rcaData.files.length === 0)
+          const autoFilled = [];
+          if (!rcaData.files || rcaData.files.length === 0) {
             rcaData.files = context.files_changed || ['unknown'];
-          if (!rcaData.references) rcaData.references = [];
+            autoFilled.push('files');
+          }
+          if (!rcaData.references) {
+            rcaData.references = [];
+            autoFilled.push('references');
+          }
           if (
             !rcaData.confidence ||
             !['high', 'medium', 'low', 'unknown'].includes(rcaData.confidence)
-          )
+          ) {
             rcaData.confidence = 'medium';
-          if (!rcaData.tags || rcaData.tags.length < 2) rcaData.tags = ['rca', 'bugfix'];
-          if (!rcaData.impact)
+            autoFilled.push('confidence');
+          }
+          if (!rcaData.tags || rcaData.tags.length < 2) {
+            rcaData.tags = ['rca', 'bugfix'];
+            autoFilled.push('tags');
+          }
+          if (!rcaData.impact) {
             rcaData.impact = rcaData.symptom || 'See symptom for affected scope.';
-        }
+            autoFilled.push('impact');
+          }
 
-        const result = validateRca(rcaData);
-        if (!result.valid) {
-          throw new RcaError('SCHEMA_VALIDATION', {
-            ajv_first_error: result.errors[0],
-          });
-        }
+          const result = validateRca(rcaData);
+          if (!result.valid) {
+            throw new RcaError('SCHEMA_VALIDATION', {
+              ajv_first_error: result.errors[0],
+            });
+          }
 
-        return { rca: result.data, cost: parsed.total_cost_usd, sessionId: parsed.session_id };
+          return {
+            rca: result.data,
+            cost: parsed.total_cost_usd,
+            sessionId: parsed.session_id,
+            autoFilled,
+          };
+        }
       } catch (err) {
         lastError = err;
         if (err.code === 'SCHEMA_VALIDATION' && attempt < maxRetries) {

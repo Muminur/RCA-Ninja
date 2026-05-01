@@ -36,6 +36,10 @@ export function renderRca(rca, context) {
   fm.date = context.timestamp_utc;
   fm.ref = context.short_hash;
   fm.branch = context.branch;
+  if (context.bug_introduced_by) {
+    const b = context.bug_introduced_by;
+    fm.bug_introduced_by = `${b.commit} by ${b.author} on ${b.date.slice(0, 10)}`;
+  }
   fm.confidence = rca.confidence;
   fm.files = rca.files;
   fm.generated_by = `claude-rca/${pkg.version}`;

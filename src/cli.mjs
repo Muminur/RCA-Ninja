@@ -14,6 +14,10 @@ import { writeRca, computeRcaPath } from './writer.mjs';
 import { search, recent, show } from './search.mjs';
 import { syncToVault, appendDailyNote, buildObsidianUri } from './obsidian.mjs';
 import { createObsidianClient } from './obsidian-api.mjs';
+import { sendWebhook } from './webhook.mjs';
+import { createProgress } from './progress.mjs';
+import { resolveTemplatePaths } from './template.mjs';
+import { auditCorpus } from './audit.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -249,23 +253,35 @@ export function createProgram() {
     .option('--no-obsidian', 'Skip Obsidian sync')
     .option('--no-secret-scan', 'Skip secret scanning of diff')
     .action(async (opts) => {
+      const progress = createProgress();
+      const overallStart = Date.now();
+
       try {
         const cwd = program.opts().cwd || process.cwd();
         const configPath = program.opts().config;
         const cfg = loadConfig({ cwd, configPath });
 
+        progress.start('Extracting context');
         const context = await buildContext({ cwd, ref: opts.from });
 
+        progress.update('Scanning for secrets');
         if (!opts.secretScan && scanForSecrets(context.diff)) {
+          progress.fail('Secret scan failed');
           throw new RcaError('INTERNAL', {
             message: 'Diff may contain secrets. Use --no-secret-scan to bypass.',
           });
         }
 
-        const systemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
-        const schemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
+        const defaultSystemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
+        const defaultSchemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
+        const { schemaPath, systemPromptPath } = resolveTemplatePaths(
+          cwd,
+          defaultSchemaPath,
+          defaultSystemPromptPath,
+        );
 
         if (opts.dryRun) {
+          progress.stop('Dry run — no file written');
           const date = context.timestamp_utc.slice(0, 10);
           const p = computeRcaPath({
             outputDir: cfg.output_dir,
@@ -277,10 +293,19 @@ export function createProgram() {
           return;
         }
 
-        const { rca } = await generate({ context, config: cfg, systemPromptPath, schemaPath });
+        progress.update('Calling Claude');
+        const { rca } = await generate({
+          context,
+          config: cfg,
+          systemPromptPath,
+          schemaPath,
+        });
+
+        progress.update('Validating and rendering');
         const md = renderRca(rca, context);
         const date = context.timestamp_utc.slice(0, 10);
 
+        progress.update('Writing RCA');
         const { path: writtenPath } = await writeRca({
           outputDir: cfg.output_dir,
           content: md,
@@ -292,6 +317,7 @@ export function createProgram() {
         process.stdout.write(writtenPath + '\n');
 
         if (opts.obsidian !== false && cfg.obsidian && cfg.obsidian.enabled) {
+          progress.update('Syncing to Obsidian');
           try {
             const targetFolder = cfg.obsidian.target_folder || 'RCA Inbox';
             const vaultPath = cfg.obsidian.vault_path;
@@ -360,9 +386,22 @@ export function createProgram() {
             process.stderr.write(`⚠ obsidian sync failed: ${obsErr.message}\n`);
           }
         }
+
+        // Webhook notification (non-blocking, like Obsidian sync)
+        if (cfg.webhooks && cfg.webhooks.enabled && cfg.webhooks.url) {
+          try {
+            await sendWebhook(rca, writtenPath, cfg);
+          } catch (whErr) {
+            process.stderr.write(`⚠ webhook notification failed: ${whErr.message}\n`);
+          }
+        }
+
+        progress.stop(
+          `Done in ${((Date.now() - overallStart) / 1000).toFixed(1)}s — ${writtenPath}`,
+        );
       } catch (err) {
         if (err instanceof RcaError) {
-          process.stderr.write(`${err.message}\n`);
+          progress.fail(err.message);
           process.exit(err.exitCode);
         }
         throw err;
@@ -655,6 +694,37 @@ export function createProgram() {
           process.exit(err.exitCode);
         }
         throw err;
+      }
+    });
+
+  program
+    .command('audit')
+    .description('Audit RCA corpus for quality — flag auto-filled or missing fields')
+    .option('--json', 'Output as JSON')
+    .action((opts) => {
+      const cwd = program.opts().cwd || process.cwd();
+      const cfg = loadConfig({ cwd, configPath: program.opts().config });
+      const result = auditCorpus({ outputDir: cfg.output_dir });
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+        if (result.degraded.length > 0) {
+          process.exit(1);
+        }
+      } else {
+        if (result.degraded.length === 0) {
+          process.stdout.write(
+            `All ${result.clean_count} RCA(s) are clean. No auto-filled fields found.\n`,
+          );
+        } else {
+          for (const entry of result.degraded) {
+            const fields = entry.auto_filled.join(', ');
+            process.stdout.write(`DEGRADED  ${entry.path}  [auto_filled: ${fields}]\n`);
+          }
+          process.stdout.write(
+            `\n${result.degraded.length} degraded, ${result.clean_count} clean.\n`,
+          );
+          process.exit(1);
+        }
       }
     });
 
