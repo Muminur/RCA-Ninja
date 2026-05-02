@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?logo=nodedotjs&logoColor=white" alt="Node.js >= 20" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" />
-  <img src="https://img.shields.io/badge/tests-285%20passed-brightgreen" alt="285 Tests" />
+  <img src="https://img.shields.io/badge/tests-209%20passed-brightgreen" alt="209 Tests" />
   <img src="https://img.shields.io/badge/coverage-85%25-brightgreen" alt="85% Coverage" />
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="v0.1.0" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Cross-platform" />
@@ -258,7 +258,7 @@ claude-rca/
 │   ├── install.sh          # macOS/Linux one-line installer
 │   └── install.ps1         # Windows PowerShell installer
 ├── .env.example            # Template for Obsidian API credentials
-└── test/                   # 285 tests (unit + integration + e2e)
+└── test/                   # 209 tests (unit + integration + e2e)
 ```
 
 ---
@@ -445,7 +445,8 @@ graph LR
 
 - Runs **in the background** — zero delay on your commit
 - Only triggers on `fix:` prefixed commits (Conventional Commits)
-- Failures go to a log file, never to stderr
+- **Structured logging** to `~/.claude-rca/hook.log` on every invocation — never fails silently
+- Failures write a `.last-rca-error` sentinel that `claude-rca doctor` reads
 
 ### commit-msg
 
@@ -453,7 +454,7 @@ Enforces [Conventional Commits](https://www.conventionalcommits.org/) format. Ac
 
 `feat` · `fix` · `docs` · `style` · `refactor` · `perf` · `test` · `build` · `ci` · `chore` · `revert`
 
-Merge commits, `Revert`, `fixup!`, and `squash!` are always passed through. The installer is idempotent and never overwrites hooks it did not create.
+Merge commits, `Revert`, `fixup!`, and `squash!` are always passed through. The installer is idempotent and never overwrites hooks it did not create. On install, it also verifies bash is available and attempts `npm link` to make `claude-rca` globally accessible on PATH.
 
 ---
 
@@ -698,7 +699,7 @@ npm test                  # unit tests
 npm run test:integration  # integration tests
 npm run test:e2e          # e2e tests with claude-stub
 npm run coverage          # c8 report (target ≥83%)
-npm run check             # lint + typecheck + test + coverage gate (285 total)
+npm run check             # lint + typecheck + test + coverage gate (209 total)
 npm run lint              # eslint + prettier
 npm run format            # auto-format with prettier
 ```
