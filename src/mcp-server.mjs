@@ -15,7 +15,7 @@ import { syncToVault, appendDailyNote } from './obsidian.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const TOOLS = [
+const CORE_TOOLS = [
   {
     name: 'rca_generate',
     description:
@@ -67,6 +67,9 @@ const TOOLS = [
       required: ['id'],
     },
   },
+];
+
+const OBSIDIAN_TOOLS = [
   {
     name: 'obsidian_search',
     description:
@@ -164,6 +167,21 @@ const TOOLS = [
     },
   },
 ];
+
+/**
+ * Returns the list of MCP tools to register based on config.
+ * Obsidian tools (7) are only included when obsidian.enabled === true,
+ * saving 2000-3500 tokens per turn when Obsidian is not in use.
+ *
+ * @param {object} cfg - Loaded config object
+ * @returns {Array} Tools array to register with the MCP server
+ */
+export function getToolsForConfig(cfg) {
+  if (cfg?.obsidian?.enabled === true) {
+    return [...CORE_TOOLS, ...OBSIDIAN_TOOLS];
+  }
+  return [...CORE_TOOLS];
+}
 
 function getObsidianClient(cfg) {
   if (!cfg.obsidian?.api_key) return null;
@@ -388,13 +406,14 @@ async function handleTool(name, args, cfg) {
 
 export async function startMcpServer({ cwd } = {}) {
   const cfg = loadConfig({ cwd });
+  const tools = getToolsForConfig(cfg);
 
   const server = new Server(
     { name: 'claude-rca', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
