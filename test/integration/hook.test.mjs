@@ -139,4 +139,20 @@ describe('hooks', () => {
       'hook must include timestamps in log entries',
     );
   });
+
+  it('install-hook.sh checks for bash availability', () => {
+    const src = readFileSync(INSTALL_HOOK, 'utf8');
+    assert.ok(
+      src.includes('bash') && (src.includes('--version') || src.includes('BASH_VERSION')),
+      'install-hook.sh must verify bash is available',
+    );
+  });
+
+  it('install-hook.sh attempts npm link', () => {
+    const src = readFileSync(INSTALL_HOOK, 'utf8');
+    assert.ok(
+      src.includes('npm link') || src.includes('npm-link'),
+      'install-hook.sh should attempt npm link to make claude-rca globally accessible',
+    );
+  });
 });
