@@ -456,10 +456,16 @@ export function createProgram() {
     });
 
   program
-    .command('search <query>')
-    .description('Search RCA corpus via ripgrep')
-    .option('--since <date>', 'Filter by date')
+    .command('search [query]')
+    .description(
+      'Search RCA corpus via ripgrep or manifest (--tag/--since/--files without query uses manifest)',
+    )
+    .option('--since <date>', 'Filter by date (YYYY-MM-DD)')
     .option('--tag <tag>', 'Filter by tag')
+    .option(
+      '--files <path>',
+      'Filter by affected source file (substring match on manifest files array)',
+    )
     .option('--json', 'Output as JSON')
     .action(async (query, opts) => {
       try {
@@ -470,6 +476,7 @@ export function createProgram() {
           query,
           tag: opts.tag,
           since: opts.since,
+          files: opts.files,
           json: opts.json,
         });
         if (opts.json) {

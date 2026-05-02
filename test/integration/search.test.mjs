@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { search, recent, show } from '../../src/search.mjs';
+import { rebuildManifest } from '../../src/manifest.mjs';
 
 function isRgAvailable() {
   try {
@@ -30,9 +31,28 @@ function createFixtures(dir, count) {
     const tag = i % 3 === 0 ? 'auth' : 'frontend';
     writeFileSync(
       join(subdir, name),
-      `---\ntitle: "Test RCA ${i}"\ntags: [rca, bugfix, ${tag}]\n---\n\n## Symptom\n\nFoo bar baz ${i} search-target\n\n## Root Cause\n\nSomething broke ${i}\n`,
+      `---\ntitle: "Test RCA ${i}"\ntags: [rca, bugfix, ${tag}]\nref: abc${String(i).padStart(4, '0')}\ndate: ${yyyy}-${mm}-01\nconfidence: medium\nfiles: ["src/foo.js", "src/bar${i}.js"]\n---\n\n## Symptom\n\nFoo bar baz ${i} search-target\n\n## Root Cause\n\nSomething broke ${i}\n`,
     );
   }
+}
+
+function createFixturesWithFiles(dir) {
+  // Create RCAs with specific file associations
+  const subdir = join(dir, '2026', '04');
+  mkdirSync(subdir, { recursive: true });
+
+  writeFileSync(
+    join(subdir, 'RCA-2026-04-25-aaa0001-foo-rca.md'),
+    '---\ntitle: "Foo RCA"\nref: aaa0001\ndate: 2026-04-25\nconfidence: high\ntags: [auth]\nfiles: ["src/foo.js", "src/utils.js"]\n---\n\n## Symptom\nFoo file broke\n',
+  );
+  writeFileSync(
+    join(subdir, 'RCA-2026-04-24-bbb0002-bar-rca.md'),
+    '---\ntitle: "Bar RCA"\nref: bbb0002\ndate: 2026-04-24\nconfidence: medium\ntags: [frontend]\nfiles: ["src/bar.js"]\n---\n\n## Symptom\nBar file broke\n',
+  );
+  writeFileSync(
+    join(subdir, 'RCA-2026-04-23-ccc0003-baz-rca.md'),
+    '---\ntitle: "Baz RCA"\nref: ccc0003\ndate: 2026-04-23\nconfidence: low\ntags: [backend]\nfiles: ["src/baz.js", "src/foo.js"]\n---\n\n## Symptom\nBaz file broke\n',
+  );
 }
 
 describe('search', () => {
@@ -70,6 +90,108 @@ describe('search', () => {
       assert.ok('text' in results[0]);
       assert.ok('mtime' in results[0]);
     }
+  });
+});
+
+describe('search --files flag', () => {
+  let tmp;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'claude-rca-search-files-'));
+    createFixturesWithFiles(tmp);
+  });
+
+  it('--files returns RCAs whose files array contains the path (substring match)', async () => {
+    await rebuildManifest(tmp);
+    const results = await search({ outputDir: tmp, files: 'src/foo.js' });
+    assert.ok(results.length > 0, 'should return at least one result');
+    // Both aaa0001 and ccc0003 have src/foo.js
+    const paths = results.map((r) => r.path);
+    const hasAaa = paths.some((p) => p.includes('aaa0001'));
+    const hasCcc = paths.some((p) => p.includes('ccc0003'));
+    assert.ok(hasAaa, 'aaa0001 RCA should be in results (has src/foo.js)');
+    assert.ok(hasCcc, 'ccc0003 RCA should be in results (has src/foo.js)');
+    // bbb0002 does NOT have src/foo.js
+    assert.ok(!paths.some((p) => p.includes('bbb0002')), 'bbb0002 should not be in results');
+  });
+
+  it('--files with no match returns empty array', async () => {
+    await rebuildManifest(tmp);
+    const results = await search({ outputDir: tmp, files: 'src/does-not-exist.js' });
+    assert.strictEqual(results.length, 0, 'should return empty for non-matching file');
+  });
+
+  it('--files with partial substring match works', async () => {
+    await rebuildManifest(tmp);
+    // "bar" is a substring of "src/bar.js"
+    const results = await search({ outputDir: tmp, files: 'bar' });
+    assert.ok(results.length > 0, 'should match files containing "bar"');
+    const paths = results.map((r) => r.path);
+    assert.ok(
+      paths.some((p) => p.includes('bbb0002')),
+      'bbb0002 has src/bar.js',
+    );
+  });
+
+  it('--files returns empty when manifest does not exist and no rg query', async () => {
+    // No rebuildManifest called — manifest missing
+    const results = await search({ outputDir: tmp, files: 'src/foo.js' });
+    // Without manifest, files filter cannot work — returns empty
+    assert.strictEqual(results.length, 0, 'no manifest → no results for --files');
+  });
+});
+
+describe('search --tag uses manifest (no rg for tag-only queries)', () => {
+  let tmp;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'claude-rca-tag-manifest-'));
+    createFixturesWithFiles(tmp);
+  });
+
+  it('--tag with no query uses manifest for filtering and returns manifest entries', async () => {
+    await rebuildManifest(tmp);
+    const results = await search({ outputDir: tmp, tag: 'auth' });
+    assert.ok(results.length > 0, 'should return results for auth tag');
+    // All returned results should have auth in their path or data
+    const paths = results.map((r) => r.path);
+    // aaa0001 has auth tag
+    assert.ok(
+      paths.some((p) => p.includes('aaa0001')),
+      'aaa0001 (auth) should be included',
+    );
+    // bbb0002 has frontend tag, not auth
+    assert.ok(
+      !paths.some((p) => p.includes('bbb0002')),
+      'bbb0002 (frontend) should not be included',
+    );
+  });
+
+  it('--tag with no match returns empty', async () => {
+    await rebuildManifest(tmp);
+    const results = await search({ outputDir: tmp, tag: 'zzz-no-such-tag' });
+    assert.strictEqual(results.length, 0, 'nonexistent tag should return empty');
+  });
+
+  it('--since with no query uses manifest for filtering by date', async () => {
+    await rebuildManifest(tmp);
+    // aaa0001: 2026-04-25, bbb0002: 2026-04-24, ccc0003: 2026-04-23
+    const results = await search({ outputDir: tmp, since: '2026-04-25' });
+    assert.ok(results.length > 0, 'since filter should return results');
+    const paths = results.map((r) => r.path);
+    // only aaa0001 on 2026-04-25 should pass
+    assert.ok(
+      paths.some((p) => p.includes('aaa0001')),
+      'aaa0001 should be included (on since date)',
+    );
+    assert.ok(
+      !paths.some((p) => p.includes('bbb0002')),
+      'bbb0002 should be excluded (before since)',
+    );
+    assert.ok(
+      !paths.some((p) => p.includes('ccc0003')),
+      'ccc0003 should be excluded (before since)',
+    );
   });
 });
 

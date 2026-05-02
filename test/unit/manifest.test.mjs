@@ -29,7 +29,7 @@ describe('rebuildManifest', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('generates _manifest.yaml from RCA files with frontmatter', async () => {
+  it('generates _manifest.jsonl format (each non-comment line is valid JSON)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-mgen-'));
     try {
       writeRca(dir, 'RCA-2026-04-25-abc1234-foo.md', {
@@ -42,24 +42,79 @@ describe('rebuildManifest', () => {
       });
 
       const manifestPath = await rebuildManifest(dir);
-      assert.ok(existsSync(manifestPath), '_manifest.yaml should exist');
+      assert.ok(existsSync(manifestPath), '_manifest.jsonl should exist');
+      assert.ok(manifestPath.endsWith('_manifest.jsonl'), 'should be .jsonl extension');
+
       const raw = readFileSync(manifestPath, 'utf8');
-      assert.ok(raw.includes('title:'), 'manifest should contain title field');
-      assert.ok(raw.includes('ref:'), 'manifest should contain ref field');
-      assert.ok(raw.includes('abc1234'), 'manifest should contain the ref value');
+      const lines = raw.split('\n').filter((l) => l.trim().length > 0);
+      const dataLines = lines.filter((l) => !l.startsWith('#'));
+
+      assert.ok(dataLines.length > 0, 'should have at least one data line');
+      for (const line of dataLines) {
+        assert.doesNotThrow(() => JSON.parse(line), `Line should be valid JSON: ${line}`);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('returns empty manifest for empty directory', async () => {
+  it('rebuildManifest output is parseable line-by-line with JSON.parse', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-jsonl-parse-'));
+    try {
+      writeRca(dir, 'RCA-2026-04-25-abc1234-foo.md', {
+        title: '"Foo bug"',
+        date: '2026-04-25T10:00:00Z',
+        ref: 'abc1234',
+        confidence: 'high',
+        tags: ['auth', 'backend'],
+        files: ['src/foo.js'],
+      });
+      writeRca(dir, 'RCA-2026-04-24-def5678-bar.md', {
+        title: '"Bar bug"',
+        date: '2026-04-24T10:00:00Z',
+        ref: 'def5678',
+        confidence: 'medium',
+        tags: ['frontend'],
+        files: ['src/bar.js'],
+      });
+
+      const manifestPath = await rebuildManifest(dir);
+      const raw = readFileSync(manifestPath, 'utf8');
+      const lines = raw.split('\n').filter((l) => l.trim().length > 0);
+      const dataLines = lines.filter((l) => !l.startsWith('#'));
+
+      // Both RCAs should parse as JSON objects
+      assert.strictEqual(dataLines.length, 2, 'should have exactly 2 JSON data lines');
+      const entries = dataLines.map((l) => JSON.parse(l));
+      const refs = entries.map((e) => e.ref);
+      assert.ok(refs.includes('abc1234'), 'abc1234 should be in parsed entries');
+      assert.ok(refs.includes('def5678'), 'def5678 should be in parsed entries');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('comment lines start with # (JSONL readers skip them)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-comments-'));
+    try {
+      const manifestPath = await rebuildManifest(dir);
+      const raw = readFileSync(manifestPath, 'utf8');
+      const commentLines = raw.split('\n').filter((l) => l.trim().length > 0 && l.startsWith('#'));
+      assert.ok(commentLines.length > 0, 'should have comment lines starting with #');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns empty manifest (no JSON data lines) for empty directory', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-empty-'));
     try {
       const manifestPath = await rebuildManifest(dir);
-      assert.ok(existsSync(manifestPath), '_manifest.yaml should exist even when empty');
+      assert.ok(existsSync(manifestPath), '_manifest.jsonl should exist even when empty');
+      assert.ok(manifestPath.endsWith('_manifest.jsonl'), 'path should end with _manifest.jsonl');
       const raw = readFileSync(manifestPath, 'utf8');
-      // An empty manifest should be an empty YAML list
-      assert.ok(raw.includes('Count: 0'), 'empty dir produces manifest with count 0');
+      const dataLines = raw.split('\n').filter((l) => l.trim().length > 0 && !l.startsWith('#'));
+      assert.strictEqual(dataLines.length, 0, 'empty dir produces no JSON data lines');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -88,8 +143,11 @@ describe('rebuildManifest', () => {
 
       const manifestPath = await rebuildManifest(dir);
       const raw = readFileSync(manifestPath, 'utf8');
-      assert.ok(raw.includes('abc1234'), 'valid file should be in manifest');
-      assert.ok(!raw.includes('def5678'), 'file missing title should be skipped');
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      const entries = dataLines.map((l) => JSON.parse(l));
+      const refs = entries.map((e) => e.ref);
+      assert.ok(refs.includes('abc1234'), 'valid file should be in manifest');
+      assert.ok(!refs.includes('def5678'), 'file missing title should be skipped');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -118,8 +176,14 @@ describe('rebuildManifest', () => {
 
       const manifestPath = await rebuildManifest(dir);
       const raw = readFileSync(manifestPath, 'utf8');
-      assert.ok(raw.includes('abc1234'), 'valid file should be in manifest');
-      assert.ok(!raw.includes('No Ref RCA'), 'file missing ref should be skipped');
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      const entries = dataLines.map((l) => JSON.parse(l));
+      const refs = entries.map((e) => e.ref);
+      assert.ok(refs.includes('abc1234'), 'valid file should be in manifest');
+      assert.ok(!refs.some((r) => r === undefined), 'no undefined refs expected');
+      // Verify "No Ref RCA" not in manifest
+      const titles = entries.map((e) => e.title);
+      assert.ok(!titles.includes('No Ref RCA'), 'file missing ref should be skipped');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -155,13 +219,12 @@ describe('rebuildManifest', () => {
 
       const manifestPath = await rebuildManifest(dir);
       const raw = readFileSync(manifestPath, 'utf8');
-      const newestPos = raw.indexOf('ccc3333');
-      const middlePos = raw.indexOf('bbb2222');
-      const oldestPos = raw.indexOf('aaa1111');
-      assert.ok(
-        newestPos < middlePos && middlePos < oldestPos,
-        'entries should be sorted newest-first',
-      );
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      const entries = dataLines.map((l) => JSON.parse(l));
+      const refs = entries.map((e) => e.ref);
+      assert.strictEqual(refs[0], 'ccc3333', 'newest should be first');
+      assert.strictEqual(refs[1], 'bbb2222', 'middle should be second');
+      assert.strictEqual(refs[2], 'aaa1111', 'oldest should be last');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -185,16 +248,19 @@ describe('rebuildManifest', () => {
 
       const manifestPath = await rebuildManifest(dir);
       const raw = readFileSync(manifestPath, 'utf8');
-      assert.ok(raw.includes('components:'), 'manifest should include components field');
-      assert.ok(raw.includes('auth-service'), 'manifest should include component values');
-      assert.ok(raw.includes('description:'), 'manifest should include description field');
-      assert.ok(raw.includes('A detailed description'), 'manifest should include description text');
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      assert.strictEqual(dataLines.length, 1);
+      const entry = JSON.parse(dataLines[0]);
+      assert.ok(Array.isArray(entry.components), 'components should be an array');
+      assert.ok(entry.components.includes('auth-service'), 'should include auth-service');
+      assert.ok(entry.description, 'should include description');
+      assert.ok(entry.description.includes('A detailed description'), 'description text correct');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('skips files starting with _ (like _manifest.yaml itself)', async () => {
+  it('skips files starting with _ (like _manifest.jsonl itself)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-underscore-'));
     try {
       // Write a valid RCA
@@ -207,19 +273,15 @@ describe('rebuildManifest', () => {
         files: [],
       });
       // Write a _ prefixed file that should be skipped
-      writeRca(dir, '_manifest.yaml', {
-        title: '"Should be skipped"',
-        date: '2026-04-20T00:00:00Z',
-        ref: 'skipped1',
-        confidence: 'high',
-        tags: [],
-        files: [],
-      });
+      writeFileSync(join(dir, '_manifest.jsonl'), 'should be ignored\n', 'utf8');
 
       const manifestPath = await rebuildManifest(dir);
       const raw = readFileSync(manifestPath, 'utf8');
-      assert.ok(raw.includes('abc9999'), 'real RCA should be in manifest');
-      assert.ok(!raw.includes('skipped1'), '_-prefixed file should be skipped');
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      const entries = dataLines.map((l) => JSON.parse(l));
+      const refs = entries.map((e) => e.ref);
+      assert.ok(refs.includes('abc9999'), 'real RCA should be in manifest');
+      assert.strictEqual(dataLines.length, 1, 'only one entry should be in manifest');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -241,20 +303,54 @@ describe('rebuildManifest', () => {
 
       const manifestPath = await rebuildManifest(dir);
       const raw = readFileSync(manifestPath, 'utf8');
-      assert.ok(raw.includes('sub1234'), 'files in subdirectories should be included');
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      const entries = dataLines.map((l) => JSON.parse(l));
+      assert.ok(
+        entries.some((e) => e.ref === 'sub1234'),
+        'files in subdirectories should be included',
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('returns the path to _manifest.yaml', async () => {
+  it('returns the path to _manifest.jsonl', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-path-'));
     try {
       const manifestPath = await rebuildManifest(dir);
       assert.ok(
-        manifestPath.endsWith('_manifest.yaml'),
-        'returned path should end with _manifest.yaml',
+        manifestPath.endsWith('_manifest.jsonl'),
+        'returned path should end with _manifest.jsonl',
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('each JSON entry contains required fields: id, ref, title, date, tags, files, path', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-fields-'));
+    try {
+      writeRca(dir, 'RCA-2026-04-25-abc1234-foo.md', {
+        title: '"Foo bug"',
+        date: '2026-04-25T10:00:00Z',
+        ref: 'abc1234',
+        confidence: 'high',
+        tags: ['auth'],
+        files: ['src/foo.js'],
+      });
+
+      const manifestPath = await rebuildManifest(dir);
+      const raw = readFileSync(manifestPath, 'utf8');
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      const entry = JSON.parse(dataLines[0]);
+
+      assert.ok('id' in entry, 'entry has id');
+      assert.ok('ref' in entry, 'entry has ref');
+      assert.ok('title' in entry, 'entry has title');
+      assert.ok('date' in entry, 'entry has date');
+      assert.ok('tags' in entry, 'entry has tags');
+      assert.ok('files' in entry, 'entry has files');
+      assert.ok('path' in entry, 'entry has path');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
