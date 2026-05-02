@@ -139,6 +139,25 @@ describe('search --files flag', () => {
     // Without manifest, files filter cannot work — returns empty
     assert.strictEqual(results.length, 0, 'no manifest → no results for --files');
   });
+
+  it(
+    '--files is silently ignored when a full-text query is also provided (rg mode)',
+    skipIfNoRg,
+    async () => {
+      // When query is given, rg full-text mode is used and --files has no effect.
+      // This test pins that documented behavior so any future change to intersect
+      // rg results with the manifest files array is a deliberate, tested decision.
+      await rebuildManifest(tmp);
+      const results = await search({ outputDir: tmp, query: 'Symptom', files: 'src/foo.js' });
+      // rg finds all files containing "Symptom", not just those matching src/foo.js
+      // aaa0001 and ccc0003 have src/foo.js, bbb0002 does not — but bbb0002 still appears
+      const paths = results.map((r) => r.path);
+      assert.ok(
+        paths.some((p) => p.includes('bbb0002')),
+        'bbb0002 appears in rg results even though it lacks src/foo.js (--files ignored in rg mode)',
+      );
+    },
+  );
 });
 
 describe('search --tag uses manifest (no rg for tag-only queries)', () => {
@@ -192,6 +211,24 @@ describe('search --tag uses manifest (no rg for tag-only queries)', () => {
       !paths.some((p) => p.includes('ccc0003')),
       'ccc0003 should be excluded (before since)',
     );
+  });
+
+  it('--tag without query works even when rg is not on PATH', async () => {
+    await rebuildManifest(tmp);
+    const origPath = process.env.PATH;
+    process.env.PATH = '';
+    try {
+      // Manifest-only mode must not invoke rg — blanking PATH would cause rg to fail
+      const results = await search({ outputDir: tmp, tag: 'auth' });
+      assert.ok(results.length > 0, 'tag-only search should succeed without rg');
+      const paths = results.map((r) => r.path);
+      assert.ok(
+        paths.some((p) => p.includes('aaa0001')),
+        'aaa0001 (auth tag) should be in results',
+      );
+    } finally {
+      process.env.PATH = origPath;
+    }
   });
 });
 
