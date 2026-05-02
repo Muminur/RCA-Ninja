@@ -107,4 +107,36 @@ describe('hooks', () => {
       });
     }, 'git commit must succeed even when claude-rca is not on PATH');
   });
+
+  it('post-commit hook logs to a file on every invocation', () => {
+    const src = readFileSync(POST_COMMIT, 'utf8');
+    assert.ok(
+      src.includes('LOG_FILE=') && src.indexOf('LOG_FILE=') < src.indexOf('command -v'),
+      'hook must define LOG_FILE before command -v check',
+    );
+  });
+
+  it('post-commit hook logs error when claude-rca is not on PATH', () => {
+    const src = readFileSync(POST_COMMIT, 'utf8');
+    assert.ok(
+      src.includes('not found') || src.includes('not installed'),
+      'hook must log a "not found" message when claude-rca is missing',
+    );
+  });
+
+  it('post-commit hook logs skip reason for non-fix commits', () => {
+    const src = readFileSync(POST_COMMIT, 'utf8');
+    assert.ok(
+      src.includes('skipped'),
+      'hook must log "skipped" for non-fix commits',
+    );
+  });
+
+  it('post-commit hook log entry includes timestamp', () => {
+    const src = readFileSync(POST_COMMIT, 'utf8');
+    assert.ok(
+      src.includes('date') || src.includes('TIMESTAMP'),
+      'hook must include timestamps in log entries',
+    );
+  });
 });

@@ -5,37 +5,53 @@
 
 set -eu
 
-# Bail if claude-rca isn't installed.
-command -v claude-rca >/dev/null 2>&1 || exit 0
+# Determine log file — always log, even if claude-rca is missing.
+LOG_DIR="${HOME}/.claude-rca"
+mkdir -p "${LOG_DIR}" 2>/dev/null || LOG_DIR="${TMPDIR:-/tmp}"
+LOG_FILE="${LOG_DIR}/hook.log"
+TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%s)"
+REF="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+MSG="$(git log -1 --pretty=%s 2>/dev/null || echo unknown)"
 
-# Only run if auto_generate is true.
-if ! claude-rca config --get auto_generate 2>/dev/null | grep -qx true; then
+log() {
+  echo "[${TIMESTAMP}] [${1}] ref=${REF} ${2}" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+# Bail if claude-rca isn't installed — but LOG the failure.
+if ! command -v claude-rca >/dev/null 2>&1; then
+  log "ERROR" "claude-rca not found on PATH — run 'npm link' in the claude-rca repo"
   exit 0
 fi
 
-MSG=$(git log -1 --pretty=%s)
+# Only run if auto_generate is true.
+if ! claude-rca config --get auto_generate 2>/dev/null | grep -qx true; then
+  log "INFO" "skipped: auto_generate is not true"
+  exit 0
+fi
+
 case "$MSG" in
   fix:*|fix\(*\):*)
+    log "INFO" "fix commit detected, starting RCA generation"
     # Run in background so commit returns immediately.
-    # On failure, write a sentinel file so `claude-rca doctor` and `recent` can warn the user.
     (
-      LOG_FILE="$(claude-rca config --get log.file 2>/dev/null || echo /tmp/claude-rca.log)"
+      GEN_LOG="$(claude-rca config --get log.file 2>/dev/null || echo "${LOG_FILE}")"
       OUTPUT_DIR="$(claude-rca config --get output_dir 2>/dev/null || echo rca)"
-      if ! claude-rca generate --from HEAD >"${LOG_FILE}" 2>&1; then
-        LAST_LINE="$(tail -1 "${LOG_FILE}")"
-        ERROR_MSG="$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" -- "${LAST_LINE}")"
-        TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        REF="$(git rev-parse --short HEAD)"
+      if claude-rca generate --from HEAD >>"${GEN_LOG}" 2>&1; then
+        log "INFO" "RCA generated successfully"
+        rm -f "${OUTPUT_DIR}/.last-rca-error"
+      else
+        LAST_LINE="$(tail -1 "${GEN_LOG}" 2>/dev/null || echo 'unknown error')"
+        ERROR_MSG="$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" -- "${LAST_LINE}" 2>/dev/null || echo "\"${LAST_LINE}\"")"
+        log "ERROR" "generation failed: ${LAST_LINE}"
         printf '{"timestamp":"%s","ref":"%s","error":%s}\n' \
           "${TIMESTAMP}" "${REF}" "${ERROR_MSG}" \
-          >"${OUTPUT_DIR}/.last-rca-error"
-      else
-        rm -f "${OUTPUT_DIR}/.last-rca-error"
+          >"${OUTPUT_DIR}/.last-rca-error" 2>/dev/null || true
       fi
     ) &
     disown 2>/dev/null || true
     ;;
   *)
+    log "INFO" "skipped: commit message does not start with fix:"
     exit 0
     ;;
 esac
