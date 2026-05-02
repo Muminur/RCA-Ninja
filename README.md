@@ -39,27 +39,27 @@ Your entire bug-fix history becomes a searchable knowledge base — no postmorte
 
 ## Features
 
-|                | Feature                   | Description                                                                  |
-| -------------- | ------------------------- | ---------------------------------------------------------------------------- |
-| **Automated**  | One-command generation    | `claude-rca generate` analyzes the diff and produces a structured RCA        |
-| **Validated**  | Schema-enforced output    | JSON Schema validation at generation time — no malformed documents           |
-| **Searchable** | ripgrep-powered search    | Full-text search across your entire RCA corpus in milliseconds               |
-| **Secure**     | Read-only Claude access   | Claude cannot write, edit, or shell out during generation                    |
-| **Atomic**     | Crash-safe writes         | Every file write uses tmp → fsync → rename — no partial files                |
-| **Hookable**   | Git hook automation       | Auto-generate RCAs on every `fix:` commit in the background                  |
-| **Obsidian**   | Vault sync                | Atomically copies RCAs to your Obsidian vault with daily note links          |
-| **Portable**   | Plain Markdown output     | Works with GitHub, Obsidian, `grep`, `cat` — anything that reads `.md`       |
-| **Quality**    | Auto-fill tracking        | Fields patched by the generator are flagged via `auto_filled` in frontmatter |
-| **Audit**      | Corpus quality check      | `claude-rca audit` flags degraded RCAs with auto-filled fields               |
-| **Blame**      | Bug introduction tracking | `bug_introduced_by` in frontmatter shows when/who introduced the bug         |
-| **Webhooks**   | Slack/Discord/generic     | POST a notification on RCA generation to any webhook URL                     |
-| **Progress**   | Spinner UX                | TTY-aware spinner with phase markers and elapsed time                        |
-| **Templates**  | Per-project customization | Override schema and prompt via `.claude-rca/` directory                      |
-| **Wizard**     | Interactive setup         | `claude-rca setup` configures vault, API keys, and hooks in one command      |
-| **Dedup**      | Related RCA detection     | Finds duplicate/related RCAs before generating, links them in references     |
-| **Code Diffs** | Before/After code blocks  | Embeds actual code changes with syntax highlighting in every RCA             |
-| **AI-Native**  | Cross-tool discovery      | AGENTS.md + manifest + rules make RCAs findable by Codex, Cursor, Copilot   |
-| **Per-Project** | Vault folder routing     | Auto-routes RCAs to project-specific Obsidian folders (`RCA/<repo-name>/`)  |
+|                 | Feature                   | Description                                                                  |
+| --------------- | ------------------------- | ---------------------------------------------------------------------------- |
+| **Automated**   | One-command generation    | `claude-rca generate` analyzes the diff and produces a structured RCA        |
+| **Validated**   | Schema-enforced output    | JSON Schema validation at generation time — no malformed documents           |
+| **Searchable**  | ripgrep-powered search    | Full-text search across your entire RCA corpus in milliseconds               |
+| **Secure**      | Read-only Claude access   | Claude cannot write, edit, or shell out during generation                    |
+| **Atomic**      | Crash-safe writes         | Every file write uses tmp → fsync → rename — no partial files                |
+| **Hookable**    | Git hook automation       | Auto-generate RCAs on every `fix:` commit in the background                  |
+| **Obsidian**    | Vault sync                | Atomically copies RCAs to your Obsidian vault with daily note links          |
+| **Portable**    | Plain Markdown output     | Works with GitHub, Obsidian, `grep`, `cat` — anything that reads `.md`       |
+| **Quality**     | Auto-fill tracking        | Fields patched by the generator are flagged via `auto_filled` in frontmatter |
+| **Audit**       | Corpus quality check      | `claude-rca audit` flags degraded RCAs with auto-filled fields               |
+| **Blame**       | Bug introduction tracking | `bug_introduced_by` in frontmatter shows when/who introduced the bug         |
+| **Webhooks**    | Slack/Discord/generic     | POST a notification on RCA generation to any webhook URL                     |
+| **Progress**    | Spinner UX                | TTY-aware spinner with phase markers and elapsed time                        |
+| **Templates**   | Per-project customization | Override schema and prompt via `.claude-rca/` directory                      |
+| **Wizard**      | Interactive setup         | `claude-rca setup` configures vault, API keys, and hooks in one command      |
+| **Dedup**       | Related RCA detection     | Finds duplicate/related RCAs before generating, links them in references     |
+| **Code Diffs**  | Before/After code blocks  | Embeds actual code changes with syntax highlighting in every RCA             |
+| **AI-Native**   | Cross-tool discovery      | AGENTS.md + manifest + rules make RCAs findable by Codex, Cursor, Copilot    |
+| **Per-Project** | Vault folder routing      | Auto-routes RCAs to project-specific Obsidian folders (`RCA/<repo-name>/`)   |
 
 ---
 
@@ -271,7 +271,7 @@ claude-rca/
 
 When you run `claude-rca generate`, you get a Markdown file like this:
 
-```markdown
+````markdown
 ---
 title: 'Session middleware null-pointers when cookie domain mismatch occurs'
 date: 2026-04-25T12:00:00Z
@@ -307,14 +307,18 @@ the cookie domain check fails so the upstream cause is observable.
 ## Code Changes
 
 ### `src/middleware/auth.js`
+
 Added null check before dereferencing session user
 
 **Before:**
+
 ```javascript
 const userId = req.session.user.id;
 ```
+````
 
 **After:**
+
 ```javascript
 if (!req.session) return res.status(401).json({ error: 'unauthenticated' });
 const userId = req.session.user.id;
@@ -324,6 +328,7 @@ const userId = req.session.user.id;
 
 All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
 /api/orders, /api/notifications. No data loss.
+
 ```
 
 ### RCA Schema Fields
@@ -368,33 +373,39 @@ All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
 ### Generate Options
 
 ```
+
 claude-rca generate [options]
 
-  --from <ref>        Git ref to analyze (default: HEAD)
-  --message <msg>     Override the commit message
-  --logs <file>       Attach a log file to the analysis context
-  --dry-run           Print the would-be output path without writing
-  --no-obsidian       Skip Obsidian sync even if configured
-  --no-secret-scan    Skip scanning the diff for secrets
+--from <ref> Git ref to analyze (default: HEAD)
+--message <msg> Override the commit message
+--logs <file> Attach a log file to the analysis context
+--dry-run Print the would-be output path without writing
+--no-obsidian Skip Obsidian sync even if configured
+--no-secret-scan Skip scanning the diff for secrets
+
 ```
 
 ### Search Options
 
 ```
+
 claude-rca search <query> [options]
 
-  --since <date>      Filter results by modification date
-  --tag <tag>         Filter to RCAs containing a specific tag
-  --json              Output results as JSON
+--since <date> Filter results by modification date
+--tag <tag> Filter to RCAs containing a specific tag
+--json Output results as JSON
+
 ```
 
 ### Config Operations
 
 ```
-claude-rca config --list                    # Print all config as JSON
-claude-rca config --get <key>               # Read a value
-claude-rca config --set <key>=<value>       # Write a value
-```
+
+claude-rca config --list # Print all config as JSON
+claude-rca config --get <key> # Read a value
+claude-rca config --set <key>=<value> # Write a value
+
+````
 
 ---
 
@@ -424,7 +435,7 @@ claude-rca config --set <key>=<value>       # Write a value
   },
   "log_level": "info"
 }
-```
+````
 
 > **Secrets go in `.env`, not config.** The Obsidian API key is loaded from environment variables — never store it in `.claude-rca.json`. See [Obsidian REST API Integration](#obsidian-rest-api-integration) for setup.
 
@@ -514,14 +525,14 @@ RCA-Ninja is designed to be discoverable by any AI coding tool — not just Clau
 
 ### How AI tools find your RCAs
 
-| Tool | Discovery mechanism |
-|------|-------------------|
-| **Claude Code** | `CLAUDE.md` + `.claude/rules/rca-discovery.md` (conditional, loads only when working with RCA files) |
-| **Codex CLI** | `AGENTS.md` (cross-tool standard, auto-read at session start) |
-| **Cursor** | `AGENTS.md` + `.cursor/rules/` |
-| **GitHub Copilot** | `AGENTS.md` |
-| **Gemini CLI** | `AGENTS.md` |
-| **Windsurf** | `AGENTS.md` |
+| Tool               | Discovery mechanism                                                                                  |
+| ------------------ | ---------------------------------------------------------------------------------------------------- |
+| **Claude Code**    | `CLAUDE.md` + `.claude/rules/rca-discovery.md` (conditional, loads only when working with RCA files) |
+| **Codex CLI**      | `AGENTS.md` (cross-tool standard, auto-read at session start)                                        |
+| **Cursor**         | `AGENTS.md` + `.cursor/rules/`                                                                       |
+| **GitHub Copilot** | `AGENTS.md`                                                                                          |
+| **Gemini CLI**     | `AGENTS.md`                                                                                          |
+| **Windsurf**       | `AGENTS.md`                                                                                          |
 
 ### Manifest file
 
@@ -529,11 +540,11 @@ Every `generate` command auto-rebuilds `rca/_manifest.yaml` — a compact index 
 
 **Token cost comparison (100 RCA corpus):**
 
-| Approach | Tokens consumed |
-|----------|----------------|
-| Read all files | ~200,000 |
-| Read manifest + 3 full matches | ~12,000 |
-| ripgrep + read 3 matches | ~2,400 |
+| Approach                       | Tokens consumed |
+| ------------------------------ | --------------- |
+| Read all files                 | ~200,000        |
+| Read manifest + 3 full matches | ~12,000         |
+| ripgrep + read 3 matches       | ~2,400          |
 
 ---
 

@@ -2,6 +2,7 @@ import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
 import { run } from './util/exec.mjs';
 import { RcaError } from './errors.mjs';
+import { loadManifest } from './manifest.mjs';
 
 function rgInstallHint() {
   const platform = process.platform;
@@ -18,25 +19,101 @@ async function checkRg() {
   }
 }
 
-export async function search({ outputDir, query, tag, since, json }) {
+/**
+ * Convert a manifest entry to a search result record.
+ * @param {Object} entry  - parsed manifest entry
+ * @param {string} outputDir
+ * @returns {{ path: string, line: number, text: string, mtime: string|null }}
+ */
+function entryToResult(entry, outputDir) {
+  const fullPath = join(outputDir, entry.path);
+  let mtime = null;
+  try {
+    mtime = statSync(fullPath).mtime.toISOString();
+  } catch {
+    /* file may not exist */
+  }
+  return {
+    path: fullPath,
+    line: 1,
+    text: entry.title || '',
+    mtime,
+  };
+}
+
+/**
+ * Search RCA corpus.
+ *
+ * Manifest-backed modes (no rg):
+ *   - tag only (no query): filter manifest by tag
+ *   - since only (no query): filter manifest by date
+ *   - files (no query): filter manifest by files array
+ *
+ * Ripgrep mode (query provided):
+ *   - always uses rg for full-text search
+ *   - tag/since are applied as pre/post filters
+ *
+ * @param {Object} opts
+ * @param {string} opts.outputDir
+ * @param {string} [opts.query]
+ * @param {string} [opts.tag]
+ * @param {string} [opts.since]
+ * @param {string} [opts.files]
+ * @param {boolean} [opts.json]
+ */
+export async function search({ outputDir, query, tag, since, files, json }) {
+  // Manifest-only mode: when no full-text query is supplied, use the manifest.
+  const useManifest = !query && (tag || since || files);
+  if (useManifest) {
+    const entries = loadManifest(outputDir);
+    if (entries.length === 0) return [];
+
+    let filtered = entries;
+
+    if (tag) {
+      filtered = filtered.filter(
+        (e) => Array.isArray(e.tags) && e.tags.some((t) => String(t) === tag),
+      );
+    }
+
+    if (since) {
+      const sinceDate = new Date(since);
+      filtered = filtered.filter((e) => e.date && new Date(e.date) >= sinceDate);
+    }
+
+    if (files) {
+      filtered = filtered.filter(
+        (e) => Array.isArray(e.files) && e.files.some((f) => String(f).includes(files)),
+      );
+    }
+
+    return filtered.map((e) => entryToResult(e, outputDir));
+  }
+
+  // If --files only (no query, no tag, no since) and no manifest, return empty.
+  if (!query && files) {
+    return [];
+  }
+
+  // Full-text ripgrep mode.
   await checkRg();
 
-  let files = null;
+  let rgFiles = null;
   if (tag) {
     try {
       const { stdout } = await run('rg', ['-l', `tags:.*\\b${tag}\\b`, outputDir], {
         timeoutMs: 10000,
       });
-      files = stdout.trim().split('\n').filter(Boolean);
-      if (files.length === 0) return [];
+      rgFiles = stdout.trim().split('\n').filter(Boolean);
+      if (rgFiles.length === 0) return [];
     } catch {
       return [];
     }
   }
 
   const rgArgs = ['--line-number', '--no-heading', query];
-  if (files) {
-    for (const f of files) rgArgs.push(f);
+  if (rgFiles) {
+    for (const f of rgFiles) rgArgs.push(f);
   } else {
     rgArgs.push(outputDir);
   }
@@ -64,7 +141,8 @@ export async function search({ outputDir, query, tag, since, json }) {
         /* file may not exist */
       }
       return { path, line: parseInt(lineNum, 10), text: text.trim(), mtime };
-    });
+    })
+    .filter(Boolean);
 
   if (since) {
     const sinceDate = new Date(since);
