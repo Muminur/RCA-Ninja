@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?logo=nodedotjs&logoColor=white" alt="Node.js >= 20" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" />
-  <img src="https://img.shields.io/badge/tests-345%20passed-brightgreen" alt="345 Tests" />
+  <img src="https://img.shields.io/badge/tests-367%20passed-brightgreen" alt="367 Tests" />
   <img src="https://img.shields.io/badge/coverage-85%25-brightgreen" alt="85% Coverage" />
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="v0.1.0" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Cross-platform" />
@@ -236,7 +236,7 @@ claude-rca/
 │   ├── obsidian.mjs        # Vault sync + daily note append
 │   ├── renderer.mjs        # JSON → Markdown with frontmatter
 │   ├── schema.mjs          # AJV schema compilation
-│   ├── search.mjs          # ripgrep-backed full-text search
+│   ├── search.mjs          # Manifest + ripgrep hybrid search with token caps
 │   ├── slug.mjs            # Deterministic URL-safe slug generation
 │   ├── writer.mjs          # Atomic file writer with collision handling
 │   ├── audit.mjs           # RCA corpus quality auditing
@@ -245,7 +245,8 @@ claude-rca/
 │   ├── template.mjs        # Per-project schema/prompt overrides
 │   ├── webhook.mjs         # Slack/Discord/generic webhook notifications
 │   ├── obsidian-api.mjs    # REST API client for Obsidian Local REST API
-│   ├── mcp-server.mjs      # MCP protocol server (11 tools)
+│   ├── manifest.mjs        # Auto-generated JSONL manifest for AI discovery
+│   ├── mcp-server.mjs      # MCP protocol server (4 core + 7 conditional tools)
 │   └── util/
 │       ├── exec.mjs        # Safe spawn wrapper (no shell)
 │       ├── fs.mjs          # atomicWrite, acquireLock, releaseLock
@@ -262,7 +263,8 @@ claude-rca/
 │   └── install.ps1         # Windows PowerShell installer
 ├── .env.example            # Template for Obsidian API credentials
 ├── AGENTS.md               # Cross-tool AI discovery (Codex, Cursor, Copilot)
-└── test/                   # 345 tests (unit + integration + e2e)
+├── .claudeignore           # Excludes rca/ from incidental Claude Code scans
+└── test/                   # 367 tests (unit + integration + e2e)
 ```
 
 ---
@@ -358,7 +360,7 @@ All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
 | ------------------------------ | ----------------------------------------------------- |
 | `claude-rca init`              | Create `.claude-rca.json` config and `rca/` directory |
 | `claude-rca generate`          | Generate an RCA for a commit                          |
-| `claude-rca search <query>`    | Full-text search across RCA corpus                    |
+| `claude-rca search [query]`    | Hybrid search — manifest for metadata, ripgrep for text |
 | `claude-rca recent [count]`    | List the N most recent RCAs (default: 10)             |
 | `claude-rca show <id>`         | Display an RCA by filename, hash, or path             |
 | `claude-rca config`            | Read/write configuration values                       |
@@ -389,10 +391,12 @@ claude-rca generate [options]
 
 ```
 
-claude-rca search <query> [options]
+claude-rca search [query] [options]
 
---since <date> Filter results by modification date
---tag <tag> Filter to RCAs containing a specific tag
+--since <date> Filter results by date (manifest-backed when no query)
+--tag <tag> Filter by tag (manifest-backed when no query)
+--files <path> Find RCAs affecting a source file (manifest-backed)
+--limit <n> Maximum results to return (default: 20)
 --json Output results as JSON
 
 ```
@@ -536,15 +540,29 @@ RCA-Ninja is designed to be discoverable by any AI coding tool — not just Clau
 
 ### Manifest file
 
-Every `generate` command auto-rebuilds `rca/_manifest.yaml` — a compact index of all RCA frontmatter. AI tools read this single file (~50-100 tokens per RCA) instead of scanning every document individually.
+Every `generate` command auto-rebuilds `rca/_manifest.jsonl` — a compact JSONL index (one JSON object per line) of all RCA frontmatter. AI tools read this single file instead of scanning every document.
+
+The search command uses this manifest automatically for `--tag`, `--since`, and `--files` queries — no ripgrep needed for metadata lookups.
+
+```bash
+# Find RCAs affecting a specific source file (reads manifest, not files)
+claude-rca search --files src/web_ui.py
+
+# Filter by tag (manifest-backed, instant)
+claude-rca search --tag auth
+
+# Full-text search (uses ripgrep with token caps)
+claude-rca search "null pointer" --limit 10
+```
 
 **Token cost comparison (100 RCA corpus):**
 
-| Approach                       | Tokens consumed |
-| ------------------------------ | --------------- |
-| Read all files                 | ~200,000        |
-| Read manifest + 3 full matches | ~12,000         |
-| ripgrep + read 3 matches       | ~2,400          |
+| Approach                          | Tokens consumed |
+| --------------------------------- | --------------- |
+| Read all files                    | ~200,000        |
+| Read manifest + 3 full matches    | ~12,000         |
+| `--files` manifest lookup         | ~300-800        |
+| ripgrep with caps + 3 matches     | ~2,400          |
 
 ---
 
@@ -763,7 +781,7 @@ npm test                  # unit tests
 npm run test:integration  # integration tests
 npm run test:e2e          # e2e tests with claude-stub
 npm run coverage          # c8 report (target ≥83%)
-npm run check             # lint + typecheck + test + coverage gate (345 total)
+npm run check             # lint + typecheck + test + coverage gate (367 total)
 npm run lint              # eslint + prettier
 npm run format            # auto-format with prettier
 ```
