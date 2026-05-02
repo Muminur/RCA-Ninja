@@ -1,0 +1,2 @@
+# RCA files are searched via claude-rca commands, not incidental grep
+rca/
