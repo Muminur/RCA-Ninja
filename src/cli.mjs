@@ -79,6 +79,28 @@ export function createProgram() {
           } catch {
             process.stderr.write(`⚠ git hooks not installed (bash not available)\n`);
           }
+
+          // After hook installation, verify claude-rca is on PATH
+          try {
+            const { spawnSync: spawnCheck } = await import('node:child_process');
+            const which = spawnCheck(
+              process.platform === 'win32' ? 'where.exe' : 'which',
+              ['claude-rca'],
+              { shell: false, stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 },
+            );
+            if (which.status !== 0) {
+              process.stderr.write(
+                `⚠ claude-rca is not on PATH — the post-commit hook will not fire.\n`,
+              );
+              process.stderr.write(
+                `  Run: cd ${join(__dirname, '..')} && npm link\n`,
+              );
+            } else {
+              process.stderr.write(`✓ claude-rca is on PATH\n`);
+            }
+          } catch {
+            process.stderr.write(`⚠ could not verify claude-rca on PATH\n`);
+          }
         }
       } catch (err) {
         if (err instanceof RcaError) {

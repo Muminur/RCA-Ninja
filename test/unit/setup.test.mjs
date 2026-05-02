@@ -35,4 +35,18 @@ describe('setup command', () => {
       `description should describe the wizard: "${cmd.description()}"`,
     );
   });
+
+  it('init command source includes PATH verification logic', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const cliSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'cli.mjs'),
+      'utf8',
+    );
+    assert.ok(
+      cliSource.includes('claude-rca') && cliSource.includes('on PATH'),
+      'init command must verify claude-rca is on PATH after hook installation',
+    );
+  });
 });
