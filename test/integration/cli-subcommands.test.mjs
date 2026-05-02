@@ -9,7 +9,7 @@ import {
   rmdirSync,
   unlinkSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createProgram } from '../../src/cli.mjs';
 
@@ -249,7 +249,9 @@ describe('obsidian sync subcommand', () => {
     await capture(() =>
       createProgram().parseAsync(['node', 'rca', '--cwd', tmp, 'obsidian', 'sync', rcaRelPath]),
     );
-    const dest = join(vault, 'RCA Inbox', rcaName);
+    // resolveTargetFolder routes 'RCA Inbox' → 'RCA/<repoName>' (per-project vault folders)
+    const repoName = basename(tmp);
+    const dest = join(vault, 'RCA', repoName, rcaName);
     assert.ok(existsSync(dest), 'must fall back to filesystem sync');
   });
 });

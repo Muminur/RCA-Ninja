@@ -350,10 +350,23 @@ export function createProgram() {
 
         process.stdout.write(writtenPath + '\n');
 
+        // Rebuild manifest (non-blocking)
+        try {
+          const { rebuildManifest } = await import('./manifest.mjs');
+          await rebuildManifest(cfg.output_dir);
+        } catch {
+          // manifest rebuild is non-blocking
+        }
+
         if (opts.obsidian !== false && cfg.obsidian && cfg.obsidian.enabled) {
           progress.update('Syncing to Obsidian');
           try {
-            const targetFolder = cfg.obsidian.target_folder || 'RCA Inbox';
+            const { resolveTargetFolder } = await import('./obsidian.mjs');
+            const repoName = context.repo_root ? context.repo_root.split(/[/\\]/).pop() : '';
+            const targetFolder = resolveTargetFolder({
+              configTargetFolder: cfg.obsidian.target_folder || '',
+              repoName,
+            });
             const vaultPath = cfg.obsidian.vault_path;
             const rcaBasename = basename(writtenPath);
             const rcaContent = readFileSync(writtenPath, 'utf8');
@@ -650,7 +663,12 @@ export function createProgram() {
         }
 
         const vaultPath = cfg.obsidian.vault_path;
-        const targetFolder = cfg.obsidian.target_folder || 'RCA Inbox';
+        const { resolveTargetFolder } = await import('./obsidian.mjs');
+        const repoName = basename(cwd);
+        const targetFolder = resolveTargetFolder({
+          configTargetFolder: cfg.obsidian.target_folder || '',
+          repoName,
+        });
         const resolvedRcaPath = resolvePath(cwd, rcaPath);
         const rcaBasename = basename(resolvedRcaPath);
         const rcaContent = readFileSync(resolvedRcaPath, 'utf8');
