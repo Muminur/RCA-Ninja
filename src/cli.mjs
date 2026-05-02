@@ -92,9 +92,7 @@ export function createProgram() {
               process.stderr.write(
                 `⚠ claude-rca is not on PATH — the post-commit hook will not fire.\n`,
               );
-              process.stderr.write(
-                `  Run: cd ${join(__dirname, '..')} && npm link\n`,
-              );
+              process.stderr.write(`  Run: cd ${join(__dirname, '..')} && npm link\n`);
             } else {
               process.stderr.write(`✓ claude-rca is on PATH\n`);
             }

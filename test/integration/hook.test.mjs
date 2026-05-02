@@ -126,10 +126,7 @@ describe('hooks', () => {
 
   it('post-commit hook logs skip reason for non-fix commits', () => {
     const src = readFileSync(POST_COMMIT, 'utf8');
-    assert.ok(
-      src.includes('skipped'),
-      'hook must log "skipped" for non-fix commits',
-    );
+    assert.ok(src.includes('skipped'), 'hook must log "skipped" for non-fix commits');
   });
 
   it('post-commit hook log entry includes timestamp', () => {

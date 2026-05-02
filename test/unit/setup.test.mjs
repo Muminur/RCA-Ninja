@@ -49,7 +49,7 @@ describe('setup command', () => {
       cliSource.indexOf("command('generate')"),
     );
     assert.ok(
-      !setupSection.includes("setConfigValue") || !setupSection.includes("api_key"),
+      !setupSection.includes('setConfigValue') || !setupSection.includes('api_key'),
       'setup command must not write api_key via setConfigValue — use .env instead',
     );
     assert.ok(

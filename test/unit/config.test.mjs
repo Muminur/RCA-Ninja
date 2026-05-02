@@ -174,8 +174,11 @@ describe('config', () => {
     process.env.OBSIDIAN_API_KEY = envKey;
     try {
       const cfg = loadConfig({ cwd: tmp });
-      assert.strictEqual(cfg.obsidian.api_key, envKey,
-        'env var must take precedence over config file api_key');
+      assert.strictEqual(
+        cfg.obsidian.api_key,
+        envKey,
+        'env var must take precedence over config file api_key',
+      );
     } finally {
       if (orig) process.env.OBSIDIAN_API_KEY = orig;
       else delete process.env.OBSIDIAN_API_KEY;
