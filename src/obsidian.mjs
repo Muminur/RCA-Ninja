@@ -59,3 +59,24 @@ export function buildObsidianUri({ vaultPath, targetFolder, rcaBasename }) {
   const filePath = `${targetFolder}/${rcaBasename.replace(/\.md$/, '')}`;
   return `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(filePath)}`;
 }
+
+/**
+ * Resolve the vault target folder for an RCA artifact.
+ *
+ * Priority:
+ *  1. configTargetFolder is non-empty and not the legacy default "RCA Inbox" → use as-is.
+ *  2. repoName is truthy → "RCA/<repoName>".
+ *  3. Fallback → "RCA/unknown".
+ *
+ * @param {{ configTargetFolder: string, repoName: string }} opts
+ * @returns {string}
+ */
+export function resolveTargetFolder({ configTargetFolder, repoName }) {
+  if (configTargetFolder && configTargetFolder !== 'RCA Inbox') {
+    return configTargetFolder;
+  }
+  if (repoName) {
+    return `RCA/${repoName}`;
+  }
+  return 'RCA/unknown';
+}

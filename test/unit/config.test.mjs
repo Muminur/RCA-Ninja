@@ -65,7 +65,7 @@ describe('config', () => {
     assert.strictEqual(cfg.claude.timeout_ms, 30000);
     assert.strictEqual(cfg.claude.use_bare, false);
     assert.strictEqual(cfg.obsidian.enabled, true);
-    assert.strictEqual(cfg.obsidian.target_folder, 'RCA Inbox');
+    assert.strictEqual(cfg.obsidian.target_folder, '');
   });
 
   it('normalizes output_dir to absolute path', () => {

@@ -29,7 +29,7 @@ const CONFIG_SCHEMA = {
       properties: {
         enabled: { type: 'boolean', default: false },
         vault_path: { type: 'string', default: '' },
-        target_folder: { type: 'string', default: 'RCA Inbox' },
+        target_folder: { type: 'string', default: '' },
         update_daily_note: { type: 'boolean', default: true },
         daily_note_format: { type: 'string', default: 'YYYY-MM-DD' },
         daily_notes_folder: { type: 'string', default: 'Daily Notes' },
