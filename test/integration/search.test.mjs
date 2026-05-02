@@ -1,11 +1,14 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { search, recent, show } from '../../src/search.mjs';
 import { rebuildManifest } from '../../src/manifest.mjs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function isRgAvailable() {
   try {
@@ -282,6 +285,90 @@ describe('show', () => {
     assert.throws(
       () => show({ outputDir: tmp, id: 'totally-bogus-id' }),
       (err) => err.code === 'NOT_FOUND',
+    );
+  });
+});
+
+// ── PR C: Search defaults polish ──────────────────────────────────────────────
+
+describe('search result cap (limit)', () => {
+  let tmp;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'claude-rca-limit-'));
+    // Create 25 fixture RCAs all containing a unique searchable term
+    for (let i = 0; i < 25; i++) {
+      const subdir = join(tmp, '2026', '01');
+      mkdirSync(subdir, { recursive: true });
+      writeFileSync(
+        join(subdir, `RCA-2026-01-01-cap${String(i).padStart(4, '0')}-cap-test.md`),
+        `---\ntitle: "Cap Test ${i}"\nref: cap${String(i).padStart(4, '0')}\ndate: 2026-01-01\nconfidence: medium\ntags: [rca, bugfix]\nfiles: ["src/cap.js"]\n---\n\n## Symptom\n\ncap-result-fixture ${i}\n`,
+      );
+    }
+  });
+
+  it('caps results at 20 by default when corpus has 25+ matches', skipIfNoRg, async () => {
+    const results = await search({ outputDir: tmp, query: 'cap-result-fixture' });
+    // 25 files × matches per file, but default limit of 20 caps the results
+    assert.ok(results.length <= 20, `expected ≤20 results, got ${results.length}`);
+    assert.ok(results.length > 0, 'should return some results');
+  });
+
+  it('respects --limit option to override the default cap', skipIfNoRg, async () => {
+    const results = await search({ outputDir: tmp, query: 'cap-result-fixture', limit: 5 });
+    assert.ok(results.length <= 5, `expected ≤5 results, got ${results.length}`);
+    assert.ok(results.length > 0, 'should return some results');
+  });
+
+  it('limit also applies to manifest-mode results', async () => {
+    // Build manifest and search tag-only (manifest mode, no rg)
+    for (let i = 0; i < 25; i++) {
+      const subdir = join(tmp, '2026', '01');
+      mkdirSync(subdir, { recursive: true });
+      writeFileSync(
+        join(subdir, `RCA-2026-01-01-mf${String(i).padStart(4, '0')}-mf-test.md`),
+        `---\ntitle: "Manifest Test ${i}"\nref: mf${String(i).padStart(4, '0')}\ndate: 2026-01-01\nconfidence: medium\ntags: [rca, bugfix, all-tag]\nfiles: ["src/mf.js"]\n---\n\n## Symptom\n\nmanifest cap test ${i}\n`,
+      );
+    }
+    await rebuildManifest(tmp);
+    const results = await search({ outputDir: tmp, tag: 'all-tag', limit: 3 });
+    assert.ok(results.length <= 3, `expected ≤3 manifest results, got ${results.length}`);
+    assert.ok(results.length > 0, 'should return some results');
+  });
+});
+
+describe('search ripgrep flag verification', () => {
+  it('search.mjs includes --type md flag in rgArgs', () => {
+    const src = readFileSync(join(__dirname, '../../src/search.mjs'), 'utf8');
+    assert.ok(
+      src.includes("'--type', 'md'") || src.includes('"--type", "md"'),
+      'search.mjs must pass --type md to ripgrep to restrict search to markdown files',
+    );
+  });
+
+  it('search.mjs includes -m / --max-count flag in rgArgs', () => {
+    const src = readFileSync(join(__dirname, '../../src/search.mjs'), 'utf8');
+    const hasDashM = /'-m'\s*,\s*'[0-9]+'/.test(src);
+    const hasMaxCount = /--max-count/.test(src);
+    assert.ok(
+      hasDashM || hasMaxCount,
+      'search.mjs must include -m <n> or --max-count to cap matches per file',
+    );
+  });
+
+  it('search.mjs includes --max-columns flag in rgArgs', () => {
+    const src = readFileSync(join(__dirname, '../../src/search.mjs'), 'utf8');
+    assert.ok(
+      src.includes('--max-columns'),
+      'search.mjs must include --max-columns to truncate long matching lines',
+    );
+  });
+
+  it('search.mjs includes --max-columns-preview flag in rgArgs', () => {
+    const src = readFileSync(join(__dirname, '../../src/search.mjs'), 'utf8');
+    assert.ok(
+      src.includes('--max-columns-preview'),
+      'search.mjs must include --max-columns-preview (not --max-column-preview)',
     );
   });
 });

@@ -60,8 +60,11 @@ function entryToResult(entry, outputDir) {
  * @param {string} [opts.since]
  * @param {string} [opts.files]
  * @param {boolean} [opts.json]
+ * @param {number} [opts.limit=20] - Maximum results to return (default 20)
  */
-export async function search({ outputDir, query, tag, since, files, json }) {
+export async function search({ outputDir, query, tag, since, files, json, limit = 20 }) {
+  const cap = Number.isInteger(limit) && limit > 0 ? limit : 20;
+
   // Manifest-only mode: when no full-text query is supplied, use the manifest.
   const useManifest = !query && (tag || since || files);
   if (useManifest) {
@@ -87,7 +90,7 @@ export async function search({ outputDir, query, tag, since, files, json }) {
       );
     }
 
-    return filtered.map((e) => entryToResult(e, outputDir));
+    return filtered.slice(0, cap).map((e) => entryToResult(e, outputDir));
   }
 
   // If --files only (no query, no tag, no since) and no manifest, return empty.
@@ -111,7 +114,18 @@ export async function search({ outputDir, query, tag, since, files, json }) {
     }
   }
 
-  const rgArgs = ['--line-number', '--no-heading', query];
+  const rgArgs = [
+    '--line-number',
+    '--no-heading',
+    '-m',
+    '3',
+    '--max-columns',
+    '200',
+    '--max-columns-preview',
+    '--type',
+    'md',
+    query,
+  ];
   if (rgFiles) {
     for (const f of rgFiles) rgArgs.push(f);
   } else {
@@ -149,11 +163,7 @@ export async function search({ outputDir, query, tag, since, files, json }) {
     results = results.filter((r) => r.mtime && new Date(r.mtime) >= sinceDate);
   }
 
-  if (json) {
-    return results;
-  }
-
-  return results;
+  return results.slice(0, cap);
 }
 
 export function recent({ outputDir, count = 10, json = false }) {

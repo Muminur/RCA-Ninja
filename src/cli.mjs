@@ -467,10 +467,12 @@ export function createProgram() {
       'Filter by affected source file (substring match on manifest files array)',
     )
     .option('--json', 'Output as JSON')
+    .option('--limit <n>', 'Maximum results to return (default: 20)')
     .action(async (query, opts) => {
       try {
         const cwd = program.opts().cwd || process.cwd();
         const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        const limit = opts.limit ? parseInt(opts.limit, 10) : 20;
         const results = await search({
           outputDir: cfg.output_dir,
           query,
@@ -478,6 +480,7 @@ export function createProgram() {
           since: opts.since,
           files: opts.files,
           json: opts.json,
+          limit,
         });
         if (opts.json) {
           process.stdout.write(JSON.stringify(results, null, 2) + '\n');
