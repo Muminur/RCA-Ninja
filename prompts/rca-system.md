@@ -26,5 +26,16 @@ Output rules:
    bug, not the fix. Imperative is forbidden ("fix X"); declarative
    is required ("X null-pointers when Y").
 
+10. The "code_changes" field captures up to 3 representative before/after hunks from
+    the diff. For each hunk: set "file" to the relative path, "before" to the removed
+    lines (stripped of leading "+"/"-" markers), "after" to the added lines. Add a
+    one-sentence "description" explaining what the hunk changes. Omit this field if
+    the diff contains no meaningful removals or only whitespace changes.
+11. The "description" field is a single declarative sentence (50–200 characters)
+    summarising what went wrong and what fixed it. It must differ from "title".
+12. The "components" field lists affected module or component identifiers derived
+    from the changed file paths (e.g. "auth-service" from "src/auth/service.js").
+    Use lowercase kebab-case or dot-notation. Include at most 10.
+
 You will receive a path to a JSON context file and a path to the diff.
 Use the Read tool to read both. Do not use any other tools.

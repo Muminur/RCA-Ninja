@@ -156,4 +156,160 @@ describe('renderer', () => {
     const md = renderRca(fixture, ctx);
     assert.ok(!md.includes('bug_introduced_by'), 'should not include bug_introduced_by when null');
   });
+
+  // --- code_changes ---
+
+  it('outputs ## Code Changes section when code_changes is non-empty', () => {
+    const rca = {
+      ...fixture,
+      code_changes: [{ file: 'src/auth.js', before: 'return null;', after: 'return 401;' }],
+    };
+    const md = renderRca(rca, makeContext());
+    assert.ok(md.includes('## Code Changes'), 'should include ## Code Changes heading');
+  });
+
+  it('skips ## Code Changes when code_changes is empty array', () => {
+    const rca = { ...fixture, code_changes: [] };
+    const md = renderRca(rca, makeContext());
+    assert.ok(!md.includes('## Code Changes'), 'should omit ## Code Changes for empty array');
+  });
+
+  it('skips ## Code Changes when code_changes is undefined', () => {
+    const rca = { ...fixture };
+    delete rca.code_changes;
+    const md = renderRca(rca, makeContext());
+    assert.ok(!md.includes('## Code Changes'), 'should omit ## Code Changes when undefined');
+  });
+
+  it('includes Before/After labels with fenced code blocks', () => {
+    const rca = {
+      ...fixture,
+      code_changes: [
+        {
+          file: 'src/foo.py',
+          before: 'x = None',
+          after: 'x = 0',
+        },
+      ],
+    };
+    const md = renderRca(rca, makeContext());
+    assert.ok(md.includes('**Before**'), 'should include Before label');
+    assert.ok(md.includes('**After**'), 'should include After label');
+    assert.ok(md.includes('```'), 'should include fenced code blocks');
+    assert.ok(md.includes('x = None'), 'should include before code');
+    assert.ok(md.includes('x = 0'), 'should include after code');
+  });
+
+  it('infers language tag from file extension', () => {
+    const cases = [
+      { file: 'src/auth.js', expectedLang: 'javascript' },
+      { file: 'src/util.mjs', expectedLang: 'javascript' },
+      { file: 'app/main.py', expectedLang: 'python' },
+      { file: 'cmd/server.go', expectedLang: 'go' },
+      { file: 'index.ts', expectedLang: 'typescript' },
+      { file: 'Makefile', expectedLang: '' },
+    ];
+    for (const { file, expectedLang } of cases) {
+      const rca = {
+        ...fixture,
+        code_changes: [{ file, before: 'old', after: 'new' }],
+      };
+      const md = renderRca(rca, makeContext());
+      assert.ok(
+        md.includes('```' + expectedLang),
+        `extension of "${file}" should yield lang "${expectedLang}" (got: ${md.slice(md.indexOf('```'), md.indexOf('```') + 20)})`,
+      );
+    }
+  });
+
+  it('uses explicit language field when provided in code_changes entry', () => {
+    const rca = {
+      ...fixture,
+      code_changes: [{ file: 'Makefile', before: 'old', after: 'new', language: 'makefile' }],
+    };
+    const md = renderRca(rca, makeContext());
+    assert.ok(md.includes('```makefile'), 'explicit language should override extension inference');
+  });
+
+  it('Code Changes section appears after ## Fix and before ## Impact', () => {
+    const rca = {
+      ...fixture,
+      code_changes: [{ file: 'src/a.ts', before: 'a', after: 'b' }],
+    };
+    const md = renderRca(rca, makeContext());
+    const fixIdx = md.indexOf('## Fix');
+    const codeIdx = md.indexOf('## Code Changes');
+    const impactIdx = md.indexOf('## Impact');
+    assert.ok(fixIdx < codeIdx, '## Code Changes should appear after ## Fix');
+    assert.ok(codeIdx < impactIdx, '## Code Changes should appear before ## Impact');
+  });
+
+  it('renders description in code_changes entry when provided', () => {
+    const rca = {
+      ...fixture,
+      code_changes: [
+        {
+          file: 'src/lib.js',
+          before: 'x',
+          after: 'y',
+          description: 'Guard the nullable path',
+        },
+      ],
+    };
+    const md = renderRca(rca, makeContext());
+    assert.ok(md.includes('Guard the nullable path'), 'entry description should appear in output');
+  });
+
+  // --- description and components in frontmatter ---
+
+  it('includes description in frontmatter when non-empty', () => {
+    const rca = { ...fixture, description: 'A useful one-line summary.' };
+    const md = renderRca(rca, makeContext());
+    const parsed = matter(md);
+    assert.strictEqual(parsed.data.description, 'A useful one-line summary.');
+  });
+
+  it('omits description from frontmatter when empty string', () => {
+    const rca = { ...fixture, description: '' };
+    const md = renderRca(rca, makeContext());
+    assert.ok(!md.includes('description:'), 'empty description should not appear in frontmatter');
+  });
+
+  it('omits description from frontmatter when undefined', () => {
+    const rca = { ...fixture };
+    delete rca.description;
+    const md = renderRca(rca, makeContext());
+    assert.ok(!md.includes('description:'), 'missing description should not appear in frontmatter');
+  });
+
+  it('description with colon round-trips through gray-matter', () => {
+    const rca = { ...fixture, description: 'Null pointer: session was missing id field' };
+    const md = renderRca(rca, makeContext());
+    const parsed = matter(md);
+    assert.strictEqual(
+      parsed.data.description,
+      'Null pointer: session was missing id field',
+      'description containing colon must round-trip correctly',
+    );
+  });
+
+  it('includes components in frontmatter when non-empty', () => {
+    const rca = { ...fixture, components: ['auth-service', 'session.middleware'] };
+    const md = renderRca(rca, makeContext());
+    const parsed = matter(md);
+    assert.deepStrictEqual(parsed.data.components, ['auth-service', 'session.middleware']);
+  });
+
+  it('omits components from frontmatter when empty array', () => {
+    const rca = { ...fixture, components: [] };
+    const md = renderRca(rca, makeContext());
+    assert.ok(!md.includes('components:'), 'empty components should not appear in frontmatter');
+  });
+
+  it('omits components from frontmatter when undefined', () => {
+    const rca = { ...fixture };
+    delete rca.components;
+    const md = renderRca(rca, makeContext());
+    assert.ok(!md.includes('components:'), 'missing components should not appear in frontmatter');
+  });
 });

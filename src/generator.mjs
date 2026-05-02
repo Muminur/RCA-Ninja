@@ -82,6 +82,9 @@ export async function generate({ context, config, systemPromptPath, schemaPath }
             'tags',
             'references',
             'confidence',
+            'code_changes',
+            'description',
+            'components',
           ]);
           for (const key of Object.keys(rcaData)) {
             if (!ALLOWED_KEYS.has(key)) delete rcaData[key];
@@ -119,6 +122,16 @@ export async function generate({ context, config, systemPromptPath, schemaPath }
           if (!rcaData.impact) {
             rcaData.impact = rcaData.symptom || 'See symptom for affected scope.';
             autoFilled.push('impact');
+          }
+          // Optional new fields: fill silently with defaults (not tracked in autoFilled)
+          if (!Array.isArray(rcaData.code_changes)) {
+            rcaData.code_changes = [];
+          }
+          if (typeof rcaData.description !== 'string') {
+            rcaData.description = '';
+          }
+          if (!Array.isArray(rcaData.components)) {
+            rcaData.components = [];
           }
 
           const result = validateRca(rcaData);

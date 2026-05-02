@@ -54,6 +54,47 @@
       "type": "string",
       "enum": ["high", "medium", "low", "unknown"],
       "description": "Model's confidence that root_cause is correct given inputs."
+    },
+    "code_changes": {
+      "type": "array",
+      "description": "Up to 5 representative before/after hunks extracted from the diff.",
+      "maxItems": 5,
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "before", "after"],
+        "properties": {
+          "file": { "type": "string", "description": "Relative file path from repo root." },
+          "before": { "type": "string", "description": "Code snippet before the fix." },
+          "after": { "type": "string", "description": "Code snippet after the fix." },
+          "description": {
+            "type": "string",
+            "description": "One sentence explaining what this hunk changes."
+          },
+          "language": {
+            "type": "string",
+            "description": "Override language tag for the fenced code block (e.g. javascript)."
+          }
+        }
+      }
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 200,
+      "default": "",
+      "description": "One-line summary of the RCA (50–200 chars recommended)."
+    },
+    "components": {
+      "type": "array",
+      "description": "Affected module/component identifiers inferred from changed file paths.",
+      "maxItems": 10,
+      "default": [],
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,50}$"
+      },
+      "uniqueItems": true
     }
   }
 }

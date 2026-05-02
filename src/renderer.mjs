@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { extname } from 'node:path';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RcaError } from './errors.mjs';
@@ -11,6 +12,48 @@ const SECTION_MAX_BYTES = 4096;
 const SECTION_ORDER = ['Symptom', 'Root Cause', 'Fix', 'Impact', 'References'];
 const SECTION_KEYS = ['symptom', 'root_cause', 'fix', 'impact', 'references'];
 
+/** Map file extensions to fenced-code-block language tags. */
+const EXT_TO_LANG = {
+  '.js': 'javascript',
+  '.mjs': 'javascript',
+  '.cjs': 'javascript',
+  '.ts': 'typescript',
+  '.tsx': 'typescript',
+  '.jsx': 'javascript',
+  '.py': 'python',
+  '.go': 'go',
+  '.rs': 'rust',
+  '.java': 'java',
+  '.rb': 'ruby',
+  '.sh': 'bash',
+  '.bash': 'bash',
+  '.zsh': 'bash',
+  '.c': 'c',
+  '.cpp': 'cpp',
+  '.h': 'c',
+  '.hpp': 'cpp',
+  '.cs': 'csharp',
+  '.php': 'php',
+  '.swift': 'swift',
+  '.kt': 'kotlin',
+  '.scala': 'scala',
+  '.json': 'json',
+  '.yaml': 'yaml',
+  '.yml': 'yaml',
+  '.toml': 'toml',
+  '.xml': 'xml',
+  '.html': 'html',
+  '.css': 'css',
+  '.scss': 'scss',
+  '.sql': 'sql',
+  '.md': 'markdown',
+};
+
+function inferLanguage(file) {
+  const ext = extname(file).toLowerCase();
+  return EXT_TO_LANG[ext] || '';
+}
+
 function escapeBody(text) {
   return String(text).replace(/^---$/gm, '\\---');
 }
@@ -20,6 +63,22 @@ function trimLines(text) {
     .split('\n')
     .map((l) => l.trimEnd())
     .join('\n');
+}
+
+function renderCodeChanges(codeChanges) {
+  if (!codeChanges || codeChanges.length === 0) return null;
+
+  const parts = ['## Code Changes'];
+  for (const entry of codeChanges) {
+    const lang = entry.language !== undefined ? entry.language : inferLanguage(entry.file);
+    parts.push(`\n### \`${entry.file}\``);
+    if (entry.description) {
+      parts.push(`\n${entry.description}`);
+    }
+    parts.push(`\n**Before**\n\n\`\`\`${lang}\n${entry.before}\n\`\`\``);
+    parts.push(`\n**After**\n\n\`\`\`${lang}\n${entry.after}\n\`\`\``);
+  }
+  return parts.join('\n');
 }
 
 export function renderRca(rca, context) {
@@ -41,10 +100,18 @@ export function renderRca(rca, context) {
     fm.bug_introduced_by = `${b.commit} by ${b.author} on ${b.date.slice(0, 10)}`;
   }
   fm.confidence = rca.confidence;
+  // Optional: description (only when non-empty)
+  if (rca.description && rca.description.length > 0) {
+    fm.description = rca.description;
+  }
   fm.files = rca.files;
   fm.generated_by = `claude-rca/${pkg.version}`;
   fm.schema = 'claude-rca.rca.v1';
   fm.tags = rca.tags;
+  // Optional: components (only when non-empty)
+  if (rca.components && rca.components.length > 0) {
+    fm.components = rca.components;
+  }
 
   const yamlLines = [];
   yamlLines.push(`title: ${JSON.stringify(fm.title)}`);
@@ -64,6 +131,9 @@ export function renderRca(rca, context) {
           yamlLines.push(`  - ${item}`);
         }
       }
+    } else if (key === 'description') {
+      // JSON.stringify to handle colons and special characters safely
+      yamlLines.push(`${key}: ${JSON.stringify(val)}`);
     } else {
       yamlLines.push(`${key}: ${val}`);
     }
@@ -81,6 +151,14 @@ export function renderRca(rca, context) {
       body = escapeBody(rca[key] || '');
     }
     sections.push(`## ${heading}\n\n${body}`);
+
+    // Insert Code Changes after Fix (index 2), before Impact (index 3)
+    if (key === 'fix') {
+      const codeSection = renderCodeChanges(rca.code_changes);
+      if (codeSection) {
+        sections.push(codeSection);
+      }
+    }
   }
 
   let md = `---\n${yamlLines.join('\n')}\n---\n\n${sections.join('\n\n')}\n`;
