@@ -22,6 +22,8 @@ Example: `rca/2026/04/RCA-2026-04-25-a3f2c1d-session-null-pointer.md`
 
 Each file has YAML frontmatter with fields: `title`, `date`, `ref`, `branch`, `confidence`, `files`, `tags`, `schema`, `generated_by`.
 
+> **Note:** `rca/` is listed in `.claudeignore`, so Claude Code will not scan RCA files during normal coding tasks. Use the dedicated search commands below to find related RCAs.
+
 ---
 
 ## Manifest Index
@@ -44,7 +46,26 @@ To rebuild the manifest after adding or modifying RCA files, run:
 
 ## Searching the RCA Corpus
 
-Use `rg` (ripgrep) for efficient full-text search across the corpus:
+Because `rca/` is in `.claudeignore`, it will not appear in incidental Claude Code searches. Use the dedicated CLI commands for manifest-first retrieval:
+
+```bash
+# Find RCAs related to a specific source file (manifest-first)
+./bin/claude-rca search --files src/middleware/auth.js
+
+# Search by tag
+./bin/claude-rca search --tag auth
+
+# Full-text search
+./bin/claude-rca search "session timeout"
+
+# List recent RCAs
+./bin/claude-rca recent 10
+
+# Show a specific RCA by ID or short hash
+./bin/claude-rca show a3f2c1d
+```
+
+Use `rg` (ripgrep) for ad-hoc full-text queries when the CLI is insufficient:
 
 ```bash
 # Full-text search across all RCAs
@@ -59,24 +80,8 @@ rg -l "components:.*\bauth-service\b" rca/
 # Search within a date range (by directory)
 rg "timeout" rca/2026/04/
 
-# Find RCAs referencing a specific file
-rg -l "src/middleware/auth.js" rca/
-
 # Find all high-confidence RCAs
 rg -l "confidence: high" rca/
-```
-
-Use the CLI for structured retrieval:
-
-```bash
-# Search with tag filtering
-./bin/claude-rca search "session timeout" --tag auth
-
-# List recent RCAs
-./bin/claude-rca recent 10
-
-# Show a specific RCA by ID or short hash
-./bin/claude-rca show a3f2c1d
 ```
 
 ---
@@ -114,11 +119,12 @@ Use the CLI for structured retrieval:
 ## Project Layout
 
 ```
-rca/                    # RCA output corpus (YYYY/MM/ subdirs)
+rca/                    # RCA output corpus (YYYY/MM/ subdirs) — claudeignored
 rca/_manifest.yaml      # Machine-readable index of all RCAs
 src/                    # CLI source modules (.mjs, ESM only)
 prompts/                # rca-system.md (system prompt), rca-schema.json (schema)
 .claude/                # Claude Code commands, agents, settings, rules
+.claudeignore           # Excludes rca/ from incidental Claude Code scans
 test/                   # Unit, integration, and e2e tests
 docs/                   # PRD, architecture, troubleshooting
 ```
@@ -128,8 +134,9 @@ docs/                   # PRD, architecture, troubleshooting
 ## Key Conventions for AI Assistants
 
 1. **Read `rca/_manifest.yaml` first** to get an overview before loading individual RCA files.
-2. **Use `rg` for filtering** — it is always available and handles large corpora efficiently.
-3. **Only read full RCA files when the manifest indicates they are relevant** to the query.
-4. **Do not modify `.obsidian/`** files or any RCA files directly — the CLI handles all writes.
-5. **Schema is enforced** — all RCA files conform to `prompts/rca-schema.json`. Frontmatter fields are stable and machine-readable.
-6. **Tags and components** in frontmatter are the primary axes for filtering. Prefer `rg -l "tags:.*\bfoo\b" rca/` over loading all files.
+2. **Use `claude-rca search --files <path>`** to find RCAs affecting the file you are debugging — this is the primary manifest-first search workflow.
+3. **Use `rg` for ad-hoc filtering** — it is always available and handles large corpora efficiently.
+4. **Only read full RCA files when the manifest indicates they are relevant** to the query.
+5. **Do not modify `.obsidian/`** files or any RCA files directly — the CLI handles all writes.
+6. **Schema is enforced** — all RCA files conform to `prompts/rca-schema.json`. Frontmatter fields are stable and machine-readable.
+7. **Tags and components** in frontmatter are the primary axes for filtering. Prefer `rg -l "tags:.*\bfoo\b" rca/` over loading all files.

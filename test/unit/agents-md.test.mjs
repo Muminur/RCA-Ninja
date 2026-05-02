@@ -27,6 +27,40 @@ describe('AGENTS.md', () => {
     const content = readFileSync(agentsMdPath, 'utf8');
     assert.ok(content.includes('rg'), 'AGENTS.md must include rg (ripgrep) search instructions');
   });
+
+  it('AGENTS.md mentions .claudeignore', () => {
+    const agentsMdPath = join(ROOT, 'AGENTS.md');
+    const content = readFileSync(agentsMdPath, 'utf8');
+    assert.ok(
+      content.includes('.claudeignore'),
+      'AGENTS.md must mention .claudeignore so AI assistants know rca/ is excluded from incidental scans',
+    );
+  });
+
+  it('AGENTS.md recommends claude-rca search --files for file-based RCA lookup', () => {
+    const agentsMdPath = join(ROOT, 'AGENTS.md');
+    const content = readFileSync(agentsMdPath, 'utf8');
+    assert.ok(
+      content.includes('claude-rca search --files'),
+      'AGENTS.md must recommend `claude-rca search --files <path>` as the manifest-first search workflow',
+    );
+  });
+});
+
+describe('.claudeignore', () => {
+  it('.claudeignore exists at repo root', () => {
+    const claudeignorePath = join(ROOT, '.claudeignore');
+    assert.ok(existsSync(claudeignorePath), '.claudeignore must exist at repo root');
+  });
+
+  it('.claudeignore contains rca/', () => {
+    const claudeignorePath = join(ROOT, '.claudeignore');
+    const content = readFileSync(claudeignorePath, 'utf8');
+    assert.ok(
+      content.includes('rca/'),
+      '.claudeignore must contain rca/ to prevent Claude Code from scanning RCA files incidentally',
+    );
+  });
 });
 
 describe('.claude/rules/rca-discovery.md', () => {
@@ -47,6 +81,17 @@ describe('.claude/rules/rca-discovery.md', () => {
     );
   });
 
+  it('.claude/rules/rca-discovery.md glob includes source file patterns', () => {
+    const content = readFileSync(rulesPath, 'utf8');
+    const parts = content.split(/^---\s*$/m);
+    assert.ok(parts.length >= 3, 'rca-discovery.md must have YAML frontmatter');
+    const frontmatter = parts[1];
+    assert.ok(
+      frontmatter.includes('src/**/*.'),
+      'rca-discovery.md frontmatter globs must include source file patterns (e.g. src/**/*.mjs)',
+    );
+  });
+
   it('.claude/rules/rca-discovery.md body instructs to read manifest first', () => {
     const content = readFileSync(rulesPath, 'utf8');
     const parts = content.split(/^---\s*$/m);
@@ -57,10 +102,13 @@ describe('.claude/rules/rca-discovery.md', () => {
     );
   });
 
-  it('.claude/rules/rca-discovery.md body instructs to use rg for filtering', () => {
+  it('.claude/rules/rca-discovery.md body instructs to use claude-rca search for retrieval', () => {
     const content = readFileSync(rulesPath, 'utf8');
     const parts = content.split(/^---\s*$/m);
     const body = parts.slice(2).join('---');
-    assert.ok(body.includes('rg'), 'rca-discovery.md body must reference rg for filtering');
+    assert.ok(
+      body.includes('claude-rca search'),
+      'rca-discovery.md body must reference `claude-rca search` as the primary retrieval command',
+    );
   });
 });
