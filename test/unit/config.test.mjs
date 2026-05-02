@@ -160,6 +160,28 @@ describe('config', () => {
     }
   });
 
+  it('OBSIDIAN_API_KEY env var overrides api_key in .claude-rca.json', () => {
+    const envKey = 'env-override-key-' + Date.now();
+    const configKey = 'config-file-key-should-be-overridden';
+    writeFileSync(
+      join(tmp, '.claude-rca.json'),
+      JSON.stringify({
+        version: 1,
+        obsidian: { enabled: true, api_key: configKey },
+      }),
+    );
+    const orig = process.env.OBSIDIAN_API_KEY;
+    process.env.OBSIDIAN_API_KEY = envKey;
+    try {
+      const cfg = loadConfig({ cwd: tmp });
+      assert.strictEqual(cfg.obsidian.api_key, envKey,
+        'env var must take precedence over config file api_key');
+    } finally {
+      if (orig) process.env.OBSIDIAN_API_KEY = orig;
+      else delete process.env.OBSIDIAN_API_KEY;
+    }
+  });
+
   it('.env handles comments, empty lines, and quoted values', () => {
     writeFileSync(
       join(tmp, '.env'),

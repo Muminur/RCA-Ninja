@@ -36,6 +36,28 @@ describe('setup command', () => {
     );
   });
 
+  it('setup command source never writes api_key to .claude-rca.json', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const cliSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'cli.mjs'),
+      'utf8',
+    );
+    const setupSection = cliSource.slice(
+      cliSource.indexOf("command('setup')"),
+      cliSource.indexOf("command('generate')"),
+    );
+    assert.ok(
+      !setupSection.includes("setConfigValue") || !setupSection.includes("api_key"),
+      'setup command must not write api_key via setConfigValue — use .env instead',
+    );
+    assert.ok(
+      setupSection.includes('OBSIDIAN_API_KEY'),
+      'setup command must write OBSIDIAN_API_KEY to .env',
+    );
+  });
+
   it('init command source includes PATH verification logic', async () => {
     const { readFileSync } = await import('node:fs');
     const { join, dirname } = await import('node:path');
