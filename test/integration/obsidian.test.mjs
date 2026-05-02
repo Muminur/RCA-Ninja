@@ -12,6 +12,7 @@ import {
   syncToVault,
   appendDailyNote,
   buildObsidianUri,
+  resolveTargetFolder,
 } from '../../src/obsidian.mjs';
 
 function createVault(tmp) {
@@ -155,5 +156,31 @@ describe('obsidian', () => {
       !/appendFileSync\s*\([^,]*\.obsidian/.test(src),
       'obsidian.mjs must not call appendFileSync with a .obsidian path',
     );
+  });
+
+  it('resolveTargetFolder uses config value when explicitly set (non-empty, not "RCA Inbox")', () => {
+    const result = resolveTargetFolder({
+      configTargetFolder: 'Projects/my-app',
+      repoName: 'my-app',
+    });
+    assert.strictEqual(result, 'Projects/my-app');
+  });
+
+  it('resolveTargetFolder auto-detects from repo name when config is empty string', () => {
+    const result = resolveTargetFolder({ configTargetFolder: '', repoName: 'cool-project' });
+    assert.strictEqual(result, 'RCA/cool-project');
+  });
+
+  it('resolveTargetFolder auto-detects when config is old default "RCA Inbox"', () => {
+    const result = resolveTargetFolder({
+      configTargetFolder: 'RCA Inbox',
+      repoName: 'cool-project',
+    });
+    assert.strictEqual(result, 'RCA/cool-project');
+  });
+
+  it('resolveTargetFolder falls back to RCA/unknown when no repo name and empty config', () => {
+    const result = resolveTargetFolder({ configTargetFolder: '', repoName: '' });
+    assert.strictEqual(result, 'RCA/unknown');
   });
 });

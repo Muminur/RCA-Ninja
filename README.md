@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?logo=nodedotjs&logoColor=white" alt="Node.js >= 20" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" />
-  <img src="https://img.shields.io/badge/tests-209%20passed-brightgreen" alt="209 Tests" />
+  <img src="https://img.shields.io/badge/tests-345%20passed-brightgreen" alt="345 Tests" />
   <img src="https://img.shields.io/badge/coverage-85%25-brightgreen" alt="85% Coverage" />
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="v0.1.0" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Cross-platform" />
@@ -57,6 +57,9 @@ Your entire bug-fix history becomes a searchable knowledge base — no postmorte
 | **Templates**  | Per-project customization | Override schema and prompt via `.claude-rca/` directory                      |
 | **Wizard**     | Interactive setup         | `claude-rca setup` configures vault, API keys, and hooks in one command      |
 | **Dedup**      | Related RCA detection     | Finds duplicate/related RCAs before generating, links them in references     |
+| **Code Diffs** | Before/After code blocks  | Embeds actual code changes with syntax highlighting in every RCA             |
+| **AI-Native**  | Cross-tool discovery      | AGENTS.md + manifest + rules make RCAs findable by Codex, Cursor, Copilot   |
+| **Per-Project** | Vault folder routing     | Auto-routes RCAs to project-specific Obsidian folders (`RCA/<repo-name>/`)  |
 
 ---
 
@@ -258,7 +261,8 @@ claude-rca/
 │   ├── install.sh          # macOS/Linux one-line installer
 │   └── install.ps1         # Windows PowerShell installer
 ├── .env.example            # Template for Obsidian API credentials
-└── test/                   # 209 tests (unit + integration + e2e)
+├── AGENTS.md               # Cross-tool AI discovery (Codex, Cursor, Copilot)
+└── test/                   # 345 tests (unit + integration + e2e)
 ```
 
 ---
@@ -300,6 +304,22 @@ auth.js now treats req.session === undefined as unauthenticated and
 short-circuits to 401. session.js was also updated to log a warning when
 the cookie domain check fails so the upstream cause is observable.
 
+## Code Changes
+
+### `src/middleware/auth.js`
+Added null check before dereferencing session user
+
+**Before:**
+```javascript
+const userId = req.session.user.id;
+```
+
+**After:**
+```javascript
+if (!req.session) return res.status(401).json({ error: 'unauthenticated' });
+const userId = req.session.user.id;
+```
+
 ## Impact
 
 All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
@@ -319,6 +339,9 @@ All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
 | `tags`       | string[] (2–6)         | Yes      | Lowercase labels, `[a-z0-9-]` pattern   |
 | `confidence` | enum                   | Yes      | `high`, `medium`, `low`, or `unknown`   |
 | `references` | string[]               | No       | Tickets, PRs, docs, links               |
+| `code_changes` | object[]             | No       | Before/after code snippets (max 5)      |
+| `description` | string (≤200 chars)   | No       | One-line summary for AI scanning        |
+| `components` | string[]               | No       | Affected modules (`executor`, `web-ui`) |
 
 ---
 
@@ -467,7 +490,7 @@ claude-rca config --set obsidian.vault_path=/path/to/vault
 
 ```mermaid
 graph LR
-    A[RCA Generated] --> B["Atomic copy →<br/>vault/RCA Inbox/"]
+    A[RCA Generated] --> B["Atomic copy →<br/>vault/RCA/repo-name/"]
     B --> C{Daily note<br/>exists?}
     C -->|Yes| D["Append wikilink<br/>[[RCA-...]] — title"]
     C -->|No| E[Skip silently]
@@ -481,6 +504,36 @@ graph LR
 - `.obsidian/` directory is **never touched** — existence check only
 - Daily note append is **idempotent** (no duplicate entries)
 - Obsidian failures are logged as warnings and **never block** generation
+- **Per-project folders**: RCAs route to `RCA/<repo-name>/` automatically (configurable via `obsidian.target_folder`)
+
+---
+
+## AI-Native Discovery
+
+RCA-Ninja is designed to be discoverable by any AI coding tool — not just Claude Code.
+
+### How AI tools find your RCAs
+
+| Tool | Discovery mechanism |
+|------|-------------------|
+| **Claude Code** | `CLAUDE.md` + `.claude/rules/rca-discovery.md` (conditional, loads only when working with RCA files) |
+| **Codex CLI** | `AGENTS.md` (cross-tool standard, auto-read at session start) |
+| **Cursor** | `AGENTS.md` + `.cursor/rules/` |
+| **GitHub Copilot** | `AGENTS.md` |
+| **Gemini CLI** | `AGENTS.md` |
+| **Windsurf** | `AGENTS.md` |
+
+### Manifest file
+
+Every `generate` command auto-rebuilds `rca/_manifest.yaml` — a compact index of all RCA frontmatter. AI tools read this single file (~50-100 tokens per RCA) instead of scanning every document individually.
+
+**Token cost comparison (100 RCA corpus):**
+
+| Approach | Tokens consumed |
+|----------|----------------|
+| Read all files | ~200,000 |
+| Read manifest + 3 full matches | ~12,000 |
+| ripgrep + read 3 matches | ~2,400 |
 
 ---
 
@@ -699,7 +752,7 @@ npm test                  # unit tests
 npm run test:integration  # integration tests
 npm run test:e2e          # e2e tests with claude-stub
 npm run coverage          # c8 report (target ≥83%)
-npm run check             # lint + typecheck + test + coverage gate (209 total)
+npm run check             # lint + typecheck + test + coverage gate (345 total)
 npm run lint              # eslint + prettier
 npm run format            # auto-format with prettier
 ```

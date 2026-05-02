@@ -86,4 +86,86 @@ describe('RCA schema', () => {
     const result = validateRca(validRca({ title: 'x'.repeat(81) }));
     assert.strictEqual(result.valid, false);
   });
+
+  // --- code_changes ---
+
+  it('accepts RCA with valid code_changes array', () => {
+    const result = validateRca(
+      validRca({
+        code_changes: [
+          {
+            file: 'src/foo.js',
+            before: 'const x = null;',
+            after: 'const x = 0;',
+            description: 'Guard against null',
+            language: 'javascript',
+          },
+        ],
+      }),
+    );
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('accepts RCA without code_changes (backward compat)', () => {
+    const { code_changes: _, ...rest } = validRca({ code_changes: [] });
+    const result = validateRca(rest);
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('rejects code_changes entry missing file field', () => {
+    const result = validateRca(
+      validRca({
+        code_changes: [{ before: 'old', after: 'new' }],
+      }),
+    );
+    assert.strictEqual(result.valid, false);
+    assert.ok(result.errors.some((e) => e.includes('file') || e.includes('required')));
+  });
+
+  // --- description ---
+
+  it('accepts RCA with description field', () => {
+    const result = validateRca(
+      validRca({ description: 'A one-line summary of what this RCA covers.' }),
+    );
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('accepts RCA without description (backward compat)', () => {
+    const { description: _, ...rest } = validRca({ description: '' });
+    const result = validateRca(rest);
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('rejects description exceeding 200 characters', () => {
+    const result = validateRca(validRca({ description: 'x'.repeat(201) }));
+    assert.strictEqual(result.valid, false);
+  });
+
+  // --- components ---
+
+  it('accepts RCA with components array', () => {
+    const result = validateRca(
+      validRca({ components: ['auth-service', 'session.middleware', 'api.v2'] }),
+    );
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('accepts RCA without components (backward compat)', () => {
+    const { components: _, ...rest } = validRca({ components: [] });
+    const result = validateRca(rest);
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('rejects components entry not matching pattern', () => {
+    const result = validateRca(validRca({ components: ['-bad-start'] }));
+    assert.strictEqual(result.valid, false);
+  });
+
+  it('rejects more than 10 components', () => {
+    const result = validateRca(
+      validRca({ components: Array.from({ length: 11 }, (_, i) => `comp${i}`) }),
+    );
+    assert.strictEqual(result.valid, false);
+  });
 });
