@@ -60,6 +60,11 @@ Your entire bug-fix history becomes a searchable knowledge base — no postmorte
 | **Code Diffs**  | Before/After code blocks  | Embeds actual code changes with syntax highlighting in every RCA             |
 | **AI-Native**   | Cross-tool discovery      | AGENTS.md + manifest + rules make RCAs findable by Codex, Cursor, Copilot    |
 | **Per-Project** | Vault folder routing      | Auto-routes RCAs to project-specific Obsidian folders (`RCA/<repo-name>/`)   |
+| **Context**     | Cross-RCA injection       | Injects prior root causes for same files so Claude spots recurrence patterns  |
+| **Backfill**    | Batch historical RCAs     | `generate --since <ref>` creates RCAs for all past `fix:` commits in one run  |
+| **Recurrence**  | `prior_bugs` frontmatter  | Flags repeated failures: manifest entries sharing files appear in frontmatter |
+| **Trends**      | Corpus aggregation        | `claude-rca trends` shows hot files, top tags, and repeat offender areas      |
+| **Amend**       | Correction re-generation  | `claude-rca amend <id> --hint "..."` re-runs Claude with a fix note in place  |
 
 ---
 
@@ -130,12 +135,22 @@ git commit -m "fix: null-check session before dereferencing user.id"
 claude-rca generate
 claude-rca generate --from HEAD~3
 
+# 5b. Backfill RCAs for all past fix: commits since a tag/ref
+claude-rca generate --since v1.0.0
+
 # 6. Search your corpus
 claude-rca search "null pointer"
 claude-rca recent 5
 claude-rca show RCA-2026-04-26-a3f2c1d-null-check-session
 
-# 6. Verify your environment
+# 7. View corpus trends — hot files, top tags, recurrent bug areas
+claude-rca trends
+claude-rca trends --json
+
+# 8. Correct a generated RCA with a re-run hint
+claude-rca amend RCA-2026-04-26-a3f2c1d --hint "The root cause was actually a race condition, not a null check"
+
+# 9. Verify your environment
 claude-rca doctor
 ```
 

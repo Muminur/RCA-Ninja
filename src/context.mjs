@@ -95,3 +95,31 @@ export async function buildContext({ cwd = process.cwd(), ref = 'HEAD', logs = n
     bug_introduced_by: bugIntroducedBy,
   };
 }
+
+/**
+ * Return all commits in the range since..HEAD whose subject starts with
+ * `fix:` or `fix(...)` (Conventional Commits). No Claude round-trip.
+ * @param {{ cwd: string, since: string }} opts
+ * @returns {Promise<Array<{ hash: string, subject: string }>>}
+ */
+export async function getFixCommits({ cwd, since }) {
+  let stdout;
+  try {
+    ({ stdout } = await run('git', ['log', `${since}..HEAD`, '--format=%H %s'], { cwd }));
+  } catch {
+    return [];
+  }
+
+  const commits = [];
+  for (const line of stdout.trim().split('\n')) {
+    if (!line.trim()) continue;
+    const spaceIdx = line.indexOf(' ');
+    if (spaceIdx === -1) continue;
+    const hash = line.slice(0, spaceIdx);
+    const subject = line.slice(spaceIdx + 1);
+    if (/^fix[:(]/.test(subject)) {
+      commits.push({ hash, subject });
+    }
+  }
+  return commits;
+}

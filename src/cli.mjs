@@ -18,7 +18,7 @@ import { sendWebhook } from './webhook.mjs';
 import { createProgress } from './progress.mjs';
 import { resolveTemplatePaths } from './template.mjs';
 import { auditCorpus } from './audit.mjs';
-import { findRelatedRcas } from './dedup.mjs';
+import { findRelatedRcas, readPriorRcas, detectRecurrences } from './dedup.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -268,6 +268,7 @@ export function createProgram() {
     .command('generate')
     .description('Generate an RCA for a commit')
     .option('--from <ref>', 'Git ref to analyze', 'HEAD')
+    .option('--since <ref>', 'Batch-generate RCAs for all fix: commits since <ref>')
     .option('--message <msg>', 'Override commit message')
     .option('--logs <file>', 'Attach log file')
     .option('--dry-run', 'Print what would be generated without writing')
@@ -281,6 +282,66 @@ export function createProgram() {
         const cwd = program.opts().cwd || process.cwd();
         const configPath = program.opts().config;
         const cfg = loadConfig({ cwd, configPath });
+
+        // --since: batch mode for historical fix commits
+        if (opts.since) {
+          const { getFixCommits } = await import('./context.mjs');
+          const fixCommits = await getFixCommits({ cwd, since: opts.since });
+          if (fixCommits.length === 0) {
+            process.stderr.write('No fix: commits found in range.\n');
+            return;
+          }
+          process.stderr.write(`Found ${fixCommits.length} fix commit(s) to process.\n`);
+          const defaultSystemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
+          const defaultSchemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
+          const { schemaPath, systemPromptPath } = resolveTemplatePaths(
+            cwd,
+            defaultSchemaPath,
+            defaultSystemPromptPath,
+          );
+          for (const { hash, subject } of fixCommits) {
+            process.stderr.write(`  Processing ${hash.slice(0, 7)}: ${subject}\n`);
+            try {
+              const context = await buildContext({ cwd, ref: hash });
+              const priorRcas = readPriorRcas({
+                outputDir: cfg.output_dir,
+                filesChanged: context.files_changed,
+              });
+              const recurrences = detectRecurrences({
+                outputDir: cfg.output_dir,
+                filesChanged: context.files_changed,
+              });
+              const { rca } = await generate({
+                context,
+                config: cfg,
+                systemPromptPath,
+                schemaPath,
+                priorRcas,
+              });
+              const md = renderRca(rca, { ...context, prior_bugs: recurrences });
+              const date = context.timestamp_utc.slice(0, 10);
+              const { path: writtenPath } = await writeRca({
+                outputDir: cfg.output_dir,
+                content: md,
+                date,
+                shortHash: context.short_hash,
+                title: rca.title,
+              });
+              process.stderr.write(`    ✓ ${writtenPath}\n`);
+              try {
+                const { rebuildManifest } = await import('./manifest.mjs');
+                await rebuildManifest(cfg.output_dir);
+              } catch {
+                /* non-blocking */
+              }
+            } catch (commitErr) {
+              process.stderr.write(
+                `    ✖ skipped (${commitErr.message || String(commitErr)})\n`,
+              );
+            }
+          }
+          return;
+        }
 
         progress.start('Extracting context');
         const context = await buildContext({ cwd, ref: opts.from });
@@ -327,16 +388,29 @@ export function createProgram() {
           }
         }
 
+        // Feature 1: inject prior root causes for context-aware generation
+        const priorRcas = readPriorRcas({
+          outputDir: cfg.output_dir,
+          filesChanged: context.files_changed,
+        });
+
+        // Feature 3: detect recurrences for prior_bugs frontmatter
+        const recurrences = detectRecurrences({
+          outputDir: cfg.output_dir,
+          filesChanged: context.files_changed,
+        });
+
         progress.update('Calling Claude');
         const { rca } = await generate({
           context,
           config: cfg,
           systemPromptPath,
           schemaPath,
+          priorRcas,
         });
 
         progress.update('Validating and rendering');
-        const md = renderRca(rca, context);
+        const md = renderRca(rca, { ...context, prior_bugs: recurrences });
         const date = context.timestamp_utc.slice(0, 10);
 
         progress.update('Writing RCA');
@@ -932,6 +1006,90 @@ export function createProgram() {
         }
 
         process.stderr.write(`✓ synced ${synced}/${mdFiles.length} RCAs to vault\n`);
+      } catch (err) {
+        if (err instanceof RcaError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
+    });
+
+  program
+    .command('trends')
+    .description('Show RCA corpus trend statistics — tag/file frequencies, recurrent areas')
+    .option('--json', 'Output as JSON')
+    .action(async (opts) => {
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        const { computeTrends } = await import('./trends.mjs');
+        const trends = await computeTrends({ outputDir: cfg.output_dir });
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(trends, null, 2) + '\n');
+        } else {
+          process.stdout.write(`Total RCAs: ${trends.total}\n`);
+          if (trends.recurrent_files.length > 0) {
+            process.stdout.write('\nRecurrent files (2+ RCAs):\n');
+            for (const { file, count } of trends.recurrent_files) {
+              process.stdout.write(`  ${String(count).padStart(3)}x  ${file}\n`);
+            }
+          }
+          const topTags = Object.entries(trends.tag_counts).slice(0, 10);
+          if (topTags.length > 0) {
+            process.stdout.write('\nTop tags:\n');
+            for (const [tag, count] of topTags) {
+              process.stdout.write(`  ${String(count).padStart(3)}x  ${tag}\n`);
+            }
+          }
+          const topFiles = Object.entries(trends.file_counts).slice(0, 10);
+          if (topFiles.length > 0) {
+            process.stdout.write('\nMost-affected files:\n');
+            for (const [file, count] of topFiles) {
+              process.stdout.write(`  ${String(count).padStart(3)}x  ${file}\n`);
+            }
+          }
+        }
+      } catch (err) {
+        if (err instanceof RcaError) {
+          process.stderr.write(`${err.message}\n`);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
+    });
+
+  program
+    .command('amend <id>')
+    .description('Re-generate an existing RCA with a correction hint, updating in place')
+    .option('--hint <text>', 'Correction hint to guide the re-generation (required)')
+    .action(async (id, opts) => {
+      if (!opts.hint) {
+        process.stderr.write('Error: --hint <text> is required\n');
+        process.exit(1);
+      }
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        const { amendRca } = await import('./amend.mjs');
+        const defaultSystemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
+        const defaultSchemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
+        const { schemaPath, systemPromptPath } = resolveTemplatePaths(
+          cwd,
+          defaultSchemaPath,
+          defaultSystemPromptPath,
+        );
+        const { path: writtenPath } = await amendRca({
+          id,
+          correctionHint: opts.hint,
+          outputDir: cfg.output_dir,
+          cwd,
+          config: cfg,
+          systemPromptPath,
+          schemaPath,
+        });
+        process.stdout.write(writtenPath + '\n');
+        process.stderr.write(`✓ amended ${writtenPath}\n`);
       } catch (err) {
         if (err instanceof RcaError) {
           process.stderr.write(`${err.message}\n`);

@@ -37,5 +37,11 @@ Output rules:
     from the changed file paths (e.g. "auth-service" from "src/auth/service.js").
     Use lowercase kebab-case or dot-notation. Include at most 10.
 
+13. If the context JSON contains a `prior_rcas` array, read it before writing your analysis.
+    Each entry has `title`, `root_cause`, `date`, and `files`. Use these to:
+    - Recognise if this fix recurs on the same root cause (note it explicitly in `root_cause`).
+    - Identify whether this is a variant or a distinct new root cause.
+    - Do NOT copy prior root causes verbatim; reason from the current diff.
+
 You will receive a path to a JSON context file and a path to the diff.
 Use the Read tool to read both. Do not use any other tools.

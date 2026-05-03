@@ -56,4 +56,19 @@ describe('cli', () => {
       assert.ok(out.includes(cmd), `help output should mention "${cmd}"`);
     }
   });
+
+  it('trends command appears in help', () => {
+    const out = execFileSync('node', [BIN, 'help'], { encoding: 'utf8', cwd: ROOT });
+    assert.ok(out.includes('trends'), 'help should mention trends command');
+  });
+
+  it('amend command appears in help', () => {
+    const out = execFileSync('node', [BIN, 'help'], { encoding: 'utf8', cwd: ROOT });
+    assert.ok(out.includes('amend'), 'help should mention amend command');
+  });
+
+  it('generate --help shows --since option', () => {
+    const out = execFileSync('node', [BIN, 'generate', '--help'], { encoding: 'utf8', cwd: ROOT });
+    assert.ok(out.includes('--since'), 'generate --help should show --since option');
+  });
 });
