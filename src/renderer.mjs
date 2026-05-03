@@ -120,6 +120,10 @@ export function renderRca(rca, context) {
   if (rca.components && rca.components.length > 0) {
     fm.components = rca.components;
   }
+  // Optional: prior_bugs from context (only when non-empty)
+  if (context.prior_bugs && context.prior_bugs.length > 0) {
+    fm.prior_bugs = context.prior_bugs;
+  }
 
   const yamlLines = [];
   yamlLines.push(`title: ${JSON.stringify(fm.title)}`);
@@ -130,7 +134,14 @@ export function renderRca(rca, context) {
     .sort(([a], [b]) => a.localeCompare(b));
 
   for (const [key, val] of rest) {
-    if (Array.isArray(val)) {
+    if (key === 'prior_bugs' && Array.isArray(val)) {
+      yamlLines.push(`${key}:`);
+      for (const item of val) {
+        yamlLines.push(`  - id: ${item.id}`);
+        yamlLines.push(`    title: ${JSON.stringify(item.title)}`);
+        yamlLines.push(`    date: "${item.date}"`);
+      }
+    } else if (Array.isArray(val)) {
       if (key === 'tags') {
         yamlLines.push(`${key}: [${val.join(', ')}]`);
       } else {

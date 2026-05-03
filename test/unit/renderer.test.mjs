@@ -368,4 +368,55 @@ describe('renderer', () => {
     const md = renderRca(rca, makeContext());
     assert.ok(!md.includes('components:'), 'missing components should not appear in frontmatter');
   });
+
+  // --- prior_bugs frontmatter ---
+
+  it('includes prior_bugs in frontmatter when context.prior_bugs is non-empty', () => {
+    const ctx = {
+      ...makeContext(),
+      prior_bugs: [{ id: 'RCA-2026-04-20-abc1234', title: 'Auth session fix', date: '2026-04-20' }],
+    };
+    const md = renderRca(fixture, ctx);
+    assert.ok(md.includes('prior_bugs:'), 'prior_bugs key should appear in frontmatter');
+  });
+
+  it('omits prior_bugs from frontmatter when context.prior_bugs is empty array', () => {
+    const ctx = { ...makeContext(), prior_bugs: [] };
+    const md = renderRca(fixture, ctx);
+    assert.ok(!md.includes('prior_bugs:'), 'prior_bugs should be omitted when empty array');
+  });
+
+  it('omits prior_bugs from frontmatter when context.prior_bugs is undefined', () => {
+    const ctx = { ...makeContext() };
+    delete ctx.prior_bugs;
+    const md = renderRca(fixture, ctx);
+    assert.ok(!md.includes('prior_bugs:'), 'prior_bugs should be omitted when undefined');
+  });
+
+  it('prior_bugs entries include id, title, date', () => {
+    const ctx = {
+      ...makeContext(),
+      prior_bugs: [{ id: 'RCA-2026-04-20-abc1234', title: 'Auth session fix', date: '2026-04-20' }],
+    };
+    const md = renderRca(fixture, ctx);
+    assert.ok(md.includes('id: RCA-2026-04-20-abc1234'), 'should include id');
+    assert.ok(md.includes('"Auth session fix"'), 'should include title (quoted)');
+    assert.ok(md.includes('date: "2026-04-20"'), 'should include date (quoted)');
+  });
+
+  it('prior_bugs round-trips through gray-matter', () => {
+    const priorBugs = [
+      { id: 'RCA-2026-04-20-abc1234', title: 'Auth session fix', date: '2026-04-20' },
+      { id: 'RCA-2026-03-10-def5678', title: 'Session: null pointer bug', date: '2026-03-10' },
+    ];
+    const ctx = { ...makeContext(), prior_bugs: priorBugs };
+    const md = renderRca(fixture, ctx);
+    const parsed = matter(md);
+    assert.ok(Array.isArray(parsed.data.prior_bugs), 'prior_bugs should parse as array');
+    assert.strictEqual(parsed.data.prior_bugs.length, 2, 'should have 2 entries');
+    assert.strictEqual(parsed.data.prior_bugs[0].id, 'RCA-2026-04-20-abc1234');
+    assert.strictEqual(parsed.data.prior_bugs[0].title, 'Auth session fix');
+    assert.strictEqual(parsed.data.prior_bugs[0].date, '2026-04-20');
+    assert.strictEqual(parsed.data.prior_bugs[1].title, 'Session: null pointer bug', 'title with colon should round-trip');
+  });
 });
