@@ -75,8 +75,12 @@ function renderCodeChanges(codeChanges) {
     if (entry.description) {
       parts.push(`\n${entry.description}`);
     }
-    parts.push(`\n**Before**\n\n\`\`\`${lang}\n${entry.before}\n\`\`\``);
-    parts.push(`\n**After**\n\n\`\`\`${lang}\n${entry.after}\n\`\`\``);
+    if (entry.before && entry.before.trim()) {
+      parts.push(`\n**Before**\n\n\`\`\`${lang}\n${entry.before}\n\`\`\``);
+    }
+    if (entry.after && entry.after.trim()) {
+      parts.push(`\n**After**\n\n\`\`\`${lang}\n${entry.after}\n\`\`\``);
+    }
   }
   return parts.join('\n');
 }
