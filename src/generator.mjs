@@ -12,22 +12,24 @@ export function scanForSecrets(diff) {
   return SECRET_REGEX.test(diff);
 }
 
-export async function generate({ context, config, systemPromptPath, schemaPath, correctionHint }) {
+export function buildContextPayload({ context, priorRcas, diffFile }) {
+  return {
+    ref: context.short_hash,
+    branch: context.branch,
+    commit_message: context.commit_message,
+    files_changed: context.files_changed,
+    diff_path: diffFile,
+    logs: context.logs,
+    ...(priorRcas && priorRcas.length > 0 ? { prior_rcas: priorRcas } : {}),
+  };
+}
+
+export async function generate({ context, config, systemPromptPath, schemaPath, correctionHint, priorRcas }) {
   const contextFile = join(tmpdir(), `claude-rca-ctx-${randomUUID()}.json`);
   const diffFile = join(tmpdir(), `claude-rca-diff-${randomUUID()}.txt`);
 
   try {
-    writeFileSync(
-      contextFile,
-      JSON.stringify({
-        ref: context.short_hash,
-        branch: context.branch,
-        commit_message: context.commit_message,
-        files_changed: context.files_changed,
-        diff_path: diffFile,
-        logs: context.logs,
-      }),
-    );
+    writeFileSync(contextFile, JSON.stringify(buildContextPayload({ context, priorRcas, diffFile })));
     writeFileSync(diffFile, context.diff);
 
     const systemPrompt = readFileSync(systemPromptPath, 'utf8');
