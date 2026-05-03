@@ -12,7 +12,7 @@ export function scanForSecrets(diff) {
   return SECRET_REGEX.test(diff);
 }
 
-export async function generate({ context, config, systemPromptPath, schemaPath }) {
+export async function generate({ context, config, systemPromptPath, schemaPath, correctionHint }) {
   const contextFile = join(tmpdir(), `claude-rca-ctx-${randomUUID()}.json`);
   const diffFile = join(tmpdir(), `claude-rca-diff-${randomUUID()}.txt`);
 
@@ -45,7 +45,9 @@ export async function generate({ context, config, systemPromptPath, schemaPath }
 
     const argv = [...cmdPrefix];
     if (useBare) argv.push('--bare');
-    argv.push('-p', `Read ${contextFile} and ${diffFile} and produce an RCA.`);
+    let prompt = `Read ${contextFile} and ${diffFile} and produce an RCA.`;
+    if (correctionHint) prompt += `\n\nCorrection hint: ${correctionHint}`;
+    argv.push('-p', prompt);
     argv.push('--append-system-prompt', systemPrompt);
     argv.push('--output-format', 'json');
     argv.push('--json-schema', schema);
