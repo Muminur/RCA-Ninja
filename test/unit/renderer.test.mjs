@@ -260,44 +260,48 @@ describe('renderer', () => {
     assert.ok(md.includes('Guard the nullable path'), 'entry description should appear in output');
   });
 
-  it('omits **Before** block when before is empty string (insertion)', () => {
+  it('uses **New Code** label for pure insertion (before empty)', () => {
     const rca = {
       ...fixture,
       code_changes: [{ file: 'src/new.py', before: '', after: 'x = 1' }],
     };
     const md = renderRca(rca, makeContext());
-    assert.ok(!md.includes('**Before**'), 'should omit **Before** when before is empty string');
-    assert.ok(md.includes('**After**'), 'should still include **After** when after has content');
+    assert.ok(!md.includes('**Before**'), 'should omit **Before** when before is empty');
+    assert.ok(!md.includes('**After**'), 'should omit **After** label for insertion');
+    assert.ok(md.includes('**New Code**'), 'should use **New Code** label for insertion');
     assert.ok(md.includes('x = 1'), 'should include after code content');
   });
 
-  it('omits **After** block when after is empty string (deletion)', () => {
+  it('uses **Removed Code** label for pure deletion (after empty)', () => {
     const rca = {
       ...fixture,
       code_changes: [{ file: 'src/old.py', before: 'x = 1', after: '' }],
     };
     const md = renderRca(rca, makeContext());
-    assert.ok(md.includes('**Before**'), 'should still include **Before** when before has content');
-    assert.ok(!md.includes('**After**'), 'should omit **After** when after is empty string');
+    assert.ok(!md.includes('**Before**'), 'should omit **Before** label for deletion');
+    assert.ok(!md.includes('**After**'), 'should omit **After** when after is empty');
+    assert.ok(md.includes('**Removed Code**'), 'should use **Removed Code** label for deletion');
     assert.ok(md.includes('x = 1'), 'should include before code content');
   });
 
-  it('omits **Before** block when before is whitespace-only', () => {
+  it('uses **New Code** label when before is whitespace-only', () => {
     const rca = {
       ...fixture,
       code_changes: [{ file: 'src/new.py', before: '   \n  ', after: 'x = 1' }],
     };
     const md = renderRca(rca, makeContext());
     assert.ok(!md.includes('**Before**'), 'should omit **Before** when before is whitespace-only');
+    assert.ok(md.includes('**New Code**'), 'should use **New Code** label');
   });
 
-  it('omits **After** block when after is whitespace-only', () => {
+  it('uses **Removed Code** label when after is whitespace-only', () => {
     const rca = {
       ...fixture,
       code_changes: [{ file: 'src/old.py', before: 'x = 1', after: '\n  \n' }],
     };
     const md = renderRca(rca, makeContext());
     assert.ok(!md.includes('**After**'), 'should omit **After** when after is whitespace-only');
+    assert.ok(md.includes('**Removed Code**'), 'should use **Removed Code** label');
   });
 
   it('renders both **Before** and **After** when both have content (regression guard)', () => {
@@ -308,6 +312,8 @@ describe('renderer', () => {
     const md = renderRca(rca, makeContext());
     assert.ok(md.includes('**Before**'), 'should include **Before** when non-empty');
     assert.ok(md.includes('**After**'), 'should include **After** when non-empty');
+    assert.ok(!md.includes('**New Code**'), 'should not use **New Code** when both sides present');
+    assert.ok(!md.includes('**Removed Code**'), 'should not use **Removed Code** when both sides present');
   });
 
   // --- description and components in frontmatter ---

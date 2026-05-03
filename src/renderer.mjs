@@ -75,11 +75,15 @@ function renderCodeChanges(codeChanges) {
     if (entry.description) {
       parts.push(`\n${entry.description}`);
     }
-    if (entry.before && entry.before.trim()) {
-      parts.push(`\n**Before**\n\n\`\`\`${lang}\n${entry.before}\n\`\`\``);
+    const hasBefore = Boolean(entry.before && entry.before.trim());
+    const hasAfter = Boolean(entry.after && entry.after.trim());
+    if (hasBefore) {
+      const label = hasAfter ? '**Before**' : '**Removed Code**';
+      parts.push(`\n${label}\n\n\`\`\`${lang}\n${entry.before}\n\`\`\``);
     }
-    if (entry.after && entry.after.trim()) {
-      parts.push(`\n**After**\n\n\`\`\`${lang}\n${entry.after}\n\`\`\``);
+    if (hasAfter) {
+      const label = hasBefore ? '**After**' : '**New Code**';
+      parts.push(`\n${label}\n\n\`\`\`${lang}\n${entry.after}\n\`\`\``);
     }
   }
   return parts.join('\n');
