@@ -138,4 +138,12 @@ describe('generate e2e', () => {
     assert.ok(ofIdx !== -1, '--output-format must be present in argv');
     assert.strictEqual(entry.argv[ofIdx + 1], 'json');
   });
+
+  it('--analyze runs analyst and still writes the RCA on PUBLISH verdict', () => {
+    makeConfig(tmp);
+    const stdout = runCli(['generate', '--analyze'], tmp);
+    const rcaPath = stdout.trim();
+    assert.ok(rcaPath.endsWith('.md'), 'stdout must be the RCA path');
+    assert.ok(existsSync(rcaPath), 'RCA file must exist');
+  });
 });

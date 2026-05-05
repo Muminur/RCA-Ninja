@@ -40,6 +40,21 @@ const canonical = {
   confidence: 'high',
 };
 
+// Analyst mode: when --append-system-prompt contains 'rca-analyst', return verdict
+const isAnalyst = args.some((a) => a.includes('rca-analyst'));
+if (isAnalyst || process.env.CLAUDE_STUB_ANALYST) {
+  process.stdout.write(
+    JSON.stringify({
+      result: 'Analyst verdict',
+      structured_output: { verdict: 'PUBLISH', findings: 'All quality criteria met.' },
+      duration_ms: 100,
+      total_cost_usd: 0.001,
+      session_id: 'stub-analyst-001',
+    }) + '\n',
+  );
+  process.exit(0);
+}
+
 const output = process.env.CLAUDE_STUB_OUTPUT
   ? JSON.parse(readFileSync(process.env.CLAUDE_STUB_OUTPUT, 'utf8'))
   : canonical;

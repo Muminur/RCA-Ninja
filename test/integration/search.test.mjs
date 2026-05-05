@@ -139,25 +139,69 @@ describe('search --files flag', () => {
     // Without manifest, files filter cannot work — returns empty
     assert.strictEqual(results.length, 0, 'no manifest → no results for --files');
   });
+});
 
-  it(
-    '--files is silently ignored when a full-text query is also provided (rg mode)',
-    skipIfNoRg,
-    async () => {
-      // When query is given, rg full-text mode is used and --files has no effect.
-      // This test pins that documented behavior so any future change to intersect
-      // rg results with the manifest files array is a deliberate, tested decision.
-      await rebuildManifest(tmp);
-      const results = await search({ outputDir: tmp, query: 'Symptom', files: 'src/foo.js' });
-      // rg finds all files containing "Symptom", not just those matching src/foo.js
-      // aaa0001 and ccc0003 have src/foo.js, bbb0002 does not — but bbb0002 still appears
-      const paths = results.map((r) => r.path);
-      assert.ok(
-        paths.some((p) => p.includes('bbb0002')),
-        'bbb0002 appears in rg results even though it lacks src/foo.js (--files ignored in rg mode)',
+describe('--files + query combined mode', () => {
+  it('post-filters rg results by manifest files when both query and files given', async function () {
+    if (!RG_AVAILABLE) {
+      this.skip();
+      return;
+    }
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-search-combo-'));
+    try {
+      createFixturesWithFiles(dir);
+      await rebuildManifest(dir);
+
+      // "Foo file" only appears in foo-rca body; foo-rca has src/foo.js in its files array
+      const results = await search({ outputDir: dir, query: 'Foo file', files: 'src/foo.js' });
+      assert.strictEqual(results.length, 1, `Expected 1 result, got ${results.length}`);
+      assert.ok(results[0].path.includes('foo-rca'), `Expected foo-rca, got ${results[0].path}`);
+    } finally {
+      const { rmSync } = await import('node:fs');
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns empty when query matches but no rca has the given files substring', async function () {
+    if (!RG_AVAILABLE) {
+      this.skip();
+      return;
+    }
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-search-combo-empty-'));
+    try {
+      createFixturesWithFiles(dir);
+      await rebuildManifest(dir);
+
+      const results = await search({ outputDir: dir, query: 'broke', files: 'src/nonexistent.js' });
+      assert.strictEqual(
+        results.length,
+        0,
+        'No results when files filter matches nothing in manifest',
       );
-    },
-  );
+    } finally {
+      const { rmSync } = await import('node:fs');
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes through all rg results when manifest is absent', async function () {
+    if (!RG_AVAILABLE) {
+      this.skip();
+      return;
+    }
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-search-combo-nomanifest-'));
+    try {
+      createFixturesWithFiles(dir);
+      // deliberately do NOT call rebuildManifest — no manifest file
+
+      const results = await search({ outputDir: dir, query: 'broke', files: 'src/foo.js' });
+      // Without manifest, files filter is skipped — rg returns all matches for 'broke'
+      assert.ok(results.length > 0, 'Should return rg results when manifest absent');
+    } finally {
+      const { rmSync } = await import('node:fs');
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('search --tag uses manifest (no rg for tag-only queries)', () => {
