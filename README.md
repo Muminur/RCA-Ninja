@@ -39,27 +39,27 @@ Your entire bug-fix history becomes a searchable knowledge base — no postmorte
 
 ## Features
 
-|                 | Feature                   | Description                                                                  |
-| --------------- | ------------------------- | ---------------------------------------------------------------------------- |
-| **Automated**   | One-command generation    | `claude-rca generate` analyzes the diff and produces a structured RCA        |
-| **Validated**   | Schema-enforced output    | JSON Schema validation at generation time — no malformed documents           |
-| **Searchable**  | ripgrep-powered search    | Full-text search across your entire RCA corpus in milliseconds               |
-| **Secure**      | Read-only Claude access   | Claude cannot write, edit, or shell out during generation                    |
-| **Atomic**      | Crash-safe writes         | Every file write uses tmp → fsync → rename — no partial files                |
-| **Hookable**    | Git hook automation       | Auto-generate RCAs on every `fix:` commit in the background                  |
-| **Obsidian**    | Vault sync                | Atomically copies RCAs to your Obsidian vault with daily note links          |
-| **Portable**    | Plain Markdown output     | Works with GitHub, Obsidian, `grep`, `cat` — anything that reads `.md`       |
-| **Quality**     | Auto-fill tracking        | Fields patched by the generator are flagged via `auto_filled` in frontmatter |
-| **Audit**       | Corpus quality check      | `claude-rca audit` flags degraded RCAs with auto-filled fields               |
-| **Blame**       | Bug introduction tracking | `bug_introduced_by` in frontmatter shows when/who introduced the bug         |
-| **Webhooks**    | Slack/Discord/generic     | POST a notification on RCA generation to any webhook URL                     |
-| **Progress**    | Spinner UX                | TTY-aware spinner with phase markers and elapsed time                        |
-| **Templates**   | Per-project customization | Override schema and prompt via `.claude-rca/` directory                      |
-| **Wizard**      | Interactive setup         | `claude-rca setup` configures vault, API keys, and hooks in one command      |
-| **Dedup**       | Related RCA detection     | Finds duplicate/related RCAs before generating, links them in references     |
-| **Code Diffs**  | Before/After code blocks  | Embeds actual code changes with syntax highlighting in every RCA             |
-| **AI-Native**   | Cross-tool discovery      | AGENTS.md + manifest + rules make RCAs findable by Codex, Cursor, Copilot    |
-| **Per-Project** | Vault folder routing      | Auto-routes RCAs to project-specific Obsidian folders (`RCA/<repo-name>/`)   |
+|                 | Feature                   | Description                                                                   |
+| --------------- | ------------------------- | ----------------------------------------------------------------------------- |
+| **Automated**   | One-command generation    | `claude-rca generate` analyzes the diff and produces a structured RCA         |
+| **Validated**   | Schema-enforced output    | JSON Schema validation at generation time — no malformed documents            |
+| **Searchable**  | ripgrep-powered search    | Full-text search across your entire RCA corpus in milliseconds                |
+| **Secure**      | Read-only Claude access   | Claude cannot write, edit, or shell out during generation                     |
+| **Atomic**      | Crash-safe writes         | Every file write uses tmp → fsync → rename — no partial files                 |
+| **Hookable**    | Git hook automation       | Auto-generate RCAs on every `fix:` commit in the background                   |
+| **Obsidian**    | Vault sync                | Atomically copies RCAs to your Obsidian vault with daily note links           |
+| **Portable**    | Plain Markdown output     | Works with GitHub, Obsidian, `grep`, `cat` — anything that reads `.md`        |
+| **Quality**     | Auto-fill tracking        | Fields patched by the generator are flagged via `auto_filled` in frontmatter  |
+| **Audit**       | Corpus quality check      | `claude-rca audit` flags degraded RCAs with auto-filled fields                |
+| **Blame**       | Bug introduction tracking | `bug_introduced_by` in frontmatter shows when/who introduced the bug          |
+| **Webhooks**    | Slack/Discord/generic     | POST a notification on RCA generation to any webhook URL                      |
+| **Progress**    | Spinner UX                | TTY-aware spinner with phase markers and elapsed time                         |
+| **Templates**   | Per-project customization | Override schema and prompt via `.claude-rca/` directory                       |
+| **Wizard**      | Interactive setup         | `claude-rca setup` configures vault, API keys, and hooks in one command       |
+| **Dedup**       | Related RCA detection     | Finds duplicate/related RCAs before generating, links them in references      |
+| **Code Diffs**  | Before/After code blocks  | Embeds actual code changes with syntax highlighting in every RCA              |
+| **AI-Native**   | Cross-tool discovery      | AGENTS.md + manifest + rules make RCAs findable by Codex, Cursor, Copilot     |
+| **Per-Project** | Vault folder routing      | Auto-routes RCAs to project-specific Obsidian folders (`RCA/<repo-name>/`)    |
 | **Context**     | Cross-RCA injection       | Injects prior root causes for same files so Claude spots recurrence patterns  |
 | **Backfill**    | Batch historical RCAs     | `generate --since <ref>` creates RCAs for all past `fix:` commits in one run  |
 | **Recurrence**  | `prior_bugs` frontmatter  | Flags repeated failures: manifest entries sharing files appear in frontmatter |
@@ -261,7 +261,7 @@ claude-rca/
 │   ├── webhook.mjs         # Slack/Discord/generic webhook notifications
 │   ├── obsidian-api.mjs    # REST API client for Obsidian Local REST API
 │   ├── manifest.mjs        # Auto-generated JSONL manifest for AI discovery
-│   ├── mcp-server.mjs      # MCP protocol server (4 core + 7 conditional tools)
+│   ├── mcp-server.mjs      # MCP protocol server (7 core + 7 conditional tools)
 │   └── util/
 │       ├── exec.mjs        # Safe spawn wrapper (no shell)
 │       ├── fs.mjs          # atomicWrite, acquireLock, releaseLock
@@ -572,12 +572,12 @@ claude-rca search "null pointer" --limit 10
 
 **Token cost comparison (100 RCA corpus):**
 
-| Approach                          | Tokens consumed |
-| --------------------------------- | --------------- |
-| Read all files                    | ~200,000        |
-| Read manifest + 3 full matches    | ~12,000         |
-| `--files` manifest lookup         | ~300-800        |
-| ripgrep with caps + 3 matches     | ~2,400          |
+| Approach                       | Tokens consumed |
+| ------------------------------ | --------------- |
+| Read all files                 | ~200,000        |
+| Read manifest + 3 full matches | ~12,000         |
+| `--files` manifest lookup      | ~300-800        |
+| ripgrep with caps + 3 matches  | ~2,400          |
 
 ---
 
@@ -587,13 +587,17 @@ claude-rca search "null pointer" --limit 10
 
 In any Claude Code session inside this project:
 
-| Command               | What it does                                   |
-| --------------------- | ---------------------------------------------- |
-| `/rca`                | Dispatcher — choose a subcommand interactively |
-| `/rca-generate [ref]` | Generate an RCA for a commit                   |
-| `/rca-search <query>` | Search your RCA corpus                         |
-| `/rca-recent [n]`     | List the newest RCAs                           |
-| `/rca-show <id>`      | Display a specific RCA                         |
+| Command                  | What it does                                         |
+| ------------------------ | ---------------------------------------------------- |
+| `/rca`                   | Dispatcher — route to any subcommand                 |
+| `/rca-generate [ref]`    | Generate an RCA for a commit                         |
+| `/rca-search <query>`    | Full-text search your RCA corpus                     |
+| `/rca-recent [n]`        | List the newest N RCAs                               |
+| `/rca-show <id>`         | Display a specific RCA by ID or hash                 |
+| `/rca-audit`             | Audit corpus for degraded (auto-filled) RCAs         |
+| `/rca-amend <id> [hint]` | Re-generate an RCA in place with optional correction |
+| `/rca-trends`            | Show tag/file/component frequency and bug hotspots   |
+| `/rca-doctor`            | Environment health check with fix suggestions        |
 
 ---
 
@@ -695,19 +699,22 @@ Add to your `claude_desktop_config.json`:
 
 ### Available MCP Tools
 
-| Tool                   | Description                                   |
-| ---------------------- | --------------------------------------------- |
-| `rca_generate`         | Generate an RCA for a commit ref              |
-| `rca_search`           | Search RCA corpus via ripgrep                 |
-| `rca_recent`           | List N most recent RCAs                       |
-| `rca_show`             | Read a specific RCA by ID/hash                |
-| `obsidian_search`      | Full-text search via Obsidian REST API        |
-| `obsidian_read_note`   | Read any note from the vault                  |
-| `obsidian_create_note` | Create a note in the vault                    |
-| `obsidian_patch_note`  | Insert content at a heading/block             |
-| `obsidian_list_folder` | List files in a vault folder                  |
-| `rca_sync_to_vault`    | Push an RCA to vault (REST API or filesystem) |
-| `rca_link_daily_note`  | Append wikilink to today's daily note         |
+| Tool                   | Description                                                   |
+| ---------------------- | ------------------------------------------------------------- |
+| `rca_generate`         | Generate an RCA for a commit ref                              |
+| `rca_search`           | Search RCA corpus — query optional when tag/since/files given |
+| `rca_recent`           | List N most recent RCAs                                       |
+| `rca_show`             | Read a specific RCA by ID/hash                                |
+| `rca_audit`            | Audit corpus for degraded (auto-filled) documents             |
+| `rca_trends`           | Tag/file/component frequency and hotspot analysis             |
+| `rca_amend`            | Re-generate an RCA in place with optional correction hint     |
+| `obsidian_search`      | Full-text search via Obsidian REST API                        |
+| `obsidian_read_note`   | Read any note from the vault                                  |
+| `obsidian_create_note` | Create a note in the vault                                    |
+| `obsidian_patch_note`  | Insert content at a heading/block                             |
+| `obsidian_list_folder` | List files in a vault folder                                  |
+| `rca_sync_to_vault`    | Push an RCA to vault (REST API or filesystem)                 |
+| `rca_link_daily_note`  | Append wikilink to today's daily note                         |
 
 The RCA tools work without Obsidian. The `obsidian_*` tools require the [Local REST API plugin](https://github.com/coddingtonbear/obsidian-local-rest-api).
 
