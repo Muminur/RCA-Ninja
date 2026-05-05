@@ -12,6 +12,9 @@ import { writeRca } from './writer.mjs';
 import { search, recent, show } from './search.mjs';
 import { createObsidianClient } from './obsidian-api.mjs';
 import { syncToVault, appendDailyNote } from './obsidian.mjs';
+import { auditCorpus } from './audit.mjs';
+import { computeTrends } from './trends.mjs';
+import { amendRca } from './amend.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -35,11 +38,14 @@ const CORE_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Search query' },
+        query: {
+          type: 'string',
+          description: 'Search query (omit to filter by tag/since/files only)',
+        },
         tag: { type: 'string', description: 'Filter by tag' },
         since: { type: 'string', description: 'Filter by date (YYYY-MM-DD)' },
+        files: { type: 'string', description: 'Filter by file path substring' },
       },
-      required: ['query'],
     },
   },
   {
@@ -63,6 +69,42 @@ const CORE_TOOLS = [
       type: 'object',
       properties: {
         id: { type: 'string', description: 'RCA identifier (filename, short hash, or full path)' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'rca_audit',
+    description:
+      'Audit the RCA corpus for degraded documents where fields were auto-filled during generation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cwd: { type: 'string', description: 'Working directory of the git repo' },
+      },
+    },
+  },
+  {
+    name: 'rca_trends',
+    description:
+      'Show tag, file, and component frequency trends across the RCA corpus. Identifies bug-prone hotspots.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cwd: { type: 'string', description: 'Working directory of the git repo' },
+      },
+    },
+  },
+  {
+    name: 'rca_amend',
+    description:
+      'Re-generate an existing RCA in place, optionally with a correction hint to guide the analyst.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'RCA identifier (short hash, basename, or full path)' },
+        correction_hint: { type: 'string', description: 'Optional guidance for improving the RCA' },
+        cwd: { type: 'string', description: 'Working directory of the git repo' },
       },
       required: ['id'],
     },
@@ -234,11 +276,23 @@ async function handleTool(name, args, cfg) {
     }
 
     case 'rca_search': {
+      if (!args.query && !args.tag && !args.since && !args.files) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'rca_search requires at least one of: query, tag, since, files.',
+            },
+          ],
+          isError: true,
+        };
+      }
       const results = await search({
         outputDir: cfg.output_dir,
         query: args.query,
         tag: args.tag,
         since: args.since,
+        files: args.files,
       });
       if (results.length === 0) {
         return { content: [{ type: 'text', text: 'No RCAs found matching the query.' }] };
@@ -260,6 +314,55 @@ async function handleTool(name, args, cfg) {
     case 'rca_show': {
       const content = show({ outputDir: cfg.output_dir, id: args.id });
       return { content: [{ type: 'text', text: content }] };
+    }
+
+    case 'rca_audit': {
+      const { degraded, clean_count } = await auditCorpus({ outputDir: cfg.output_dir });
+      const text =
+        degraded.length > 0
+          ? `${degraded.length} degraded RCAs:\n${degraded.map((d) => `  ${d.path} (auto_filled: ${(d.auto_filled || []).join(', ')})`).join('\n')}\n\n${clean_count} clean.`
+          : `All ${clean_count} RCAs pass quality audit.`;
+      return { content: [{ type: 'text', text }] };
+    }
+
+    case 'rca_trends': {
+      const trends = await computeTrends({ outputDir: cfg.output_dir });
+      const lines = [
+        `Total RCAs: ${trends.total}`,
+        `Top tags: ${Object.entries(trends.tag_counts)
+          .slice(0, 5)
+          .map(([t, n]) => `${t}(${n})`)
+          .join(', ')}`,
+        `Top files: ${Object.entries(trends.file_counts)
+          .slice(0, 5)
+          .map(([f, n]) => `${f}(${n})`)
+          .join(', ')}`,
+        trends.recurrent_files.length > 0
+          ? `Hotspots: ${trends.recurrent_files.map((r) => `${r.file}(${r.count})`).join(', ')}`
+          : 'No recurrent files.',
+      ];
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    }
+
+    case 'rca_amend': {
+      if (!args.id) {
+        return {
+          content: [{ type: 'text', text: 'rca_amend requires an id argument.' }],
+          isError: true,
+        };
+      }
+      const amendSystemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
+      const amendSchemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
+      const { path: amendedPath } = await amendRca({
+        id: args.id,
+        correctionHint: args.correction_hint,
+        outputDir: cfg.output_dir,
+        cwd,
+        config: cfg,
+        systemPromptPath: amendSystemPromptPath,
+        schemaPath: amendSchemaPath,
+      });
+      return { content: [{ type: 'text', text: `RCA amended: ${amendedPath}` }] };
     }
 
     case 'obsidian_search': {

@@ -92,9 +92,9 @@ describe('amendRca', () => {
     try {
       writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
 
-      let capturedArgs;
+      let _capturedArgs;
       const fakegen = async (args) => {
-        capturedArgs = args;
+        _capturedArgs = args;
         return { rca: makeFakeRca(), cost: 0, sessionId: 'fake', autoFilled: [] };
       };
 
