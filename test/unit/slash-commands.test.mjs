@@ -36,7 +36,7 @@ function parseSimpleYaml(yaml) {
 describe('slash commands', () => {
   it('commands directory exists with at least 5 command files', { skip: SKIP }, () => {
     const files = readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.md'));
-    assert.ok(files.length >= 5, `Expected ≥5 command files, got ${files.length}`);
+    assert.ok(files.length >= 9, `Expected ≥9 command files, got ${files.length}`);
   });
 
   it('all command files have valid YAML frontmatter', { skip: SKIP }, () => {
@@ -86,9 +86,18 @@ describe('slash commands', () => {
     }
   });
 
-  it('rca.md dispatcher references all four subcommands', { skip: SKIP }, () => {
+  it('rca.md dispatcher references all eight subcommands', { skip: SKIP }, () => {
     const { body } = parseCommandFile(join(COMMANDS_DIR, 'rca.md'));
-    for (const cmd of ['generate', 'search', 'recent', 'show']) {
+    for (const cmd of [
+      'generate',
+      'search',
+      'recent',
+      'show',
+      'audit',
+      'amend',
+      'trends',
+      'doctor',
+    ]) {
       assert.ok(body.includes(cmd), `rca.md must reference ${cmd} subcommand`);
     }
   });

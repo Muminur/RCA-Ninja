@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { rebuildManifest } from '../../src/manifest.mjs';
+import { rebuildManifest, loadManifest } from '../../src/manifest.mjs';
 
 function writeRca(dir, filename, frontmatter, body = 'body text') {
   const fmLines = Object.entries(frontmatter).map(([k, v]) => {
@@ -354,5 +354,58 @@ describe('rebuildManifest', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('handles non-existent outputDir gracefully (walk catch)', async () => {
+    const nonExistentDir = join(tmpdir(), 'claude-rca-manifest-nodir-' + Date.now());
+    const manifestPath = await rebuildManifest(nonExistentDir);
+    assert.ok(manifestPath.endsWith('_manifest.jsonl'), 'should return manifest path');
+    const raw = readFileSync(manifestPath, 'utf8');
+    const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+    assert.strictEqual(dataLines.length, 0, 'non-existent dir should produce empty manifest');
+    rmSync(nonExistentDir, { recursive: true, force: true });
+  });
+
+  it('toDateString uses raw string when date is not ISO format', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-manifest-date-'));
+    try {
+      writeFileSync(
+        join(dir, 'RCA-2026-01-01-abc9999-test.md'),
+        '---\ntitle: "Date string test"\nref: abc9999\ndate: not-a-date\nconfidence: high\ntags: []\nfiles: []\n---\n\n## Symptom\nTest\n',
+        'utf8',
+      );
+      const manifestPath = await rebuildManifest(dir);
+      const raw = readFileSync(manifestPath, 'utf8');
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      assert.ok(dataLines.length > 0, 'should have an entry for the RCA');
+      const entry = JSON.parse(dataLines[0]);
+      assert.ok(typeof entry.date === 'string', 'date should be a string');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('loadManifest', () => {
+  it('returns empty array when manifest does not exist', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-load-manifest-'));
+    const result = loadManifest(dir);
+    assert.ok(Array.isArray(result));
+    assert.strictEqual(result.length, 0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('skips malformed JSON lines and returns valid entries', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-load-manifest-malformed-'));
+    const validEntry = JSON.stringify({ id: 'RCA-1', title: 'Test', ref: 'abc0001' });
+    writeFileSync(
+      join(dir, '_manifest.jsonl'),
+      `# header\n${validEntry}\nnot-valid-json!!!\n{ broken }\n`,
+      'utf8',
+    );
+    const result = loadManifest(dir);
+    assert.strictEqual(result.length, 1, 'only 1 valid JSON line should be parsed');
+    assert.strictEqual(result[0].id, 'RCA-1');
+    rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -62,6 +62,59 @@ function writeFakeRcaFile(dir, filename, frontmatterFields = {}) {
 }
 
 describe('amendRca', () => {
+  it('throws NOT_FOUND when outputDir does not exist', async () => {
+    const nonExistentDir = join(tmpdir(), 'claude-rca-amend-nodir-' + Date.now());
+    await assert.rejects(
+      () =>
+        amendRca({
+          id: 'any-id',
+          correctionHint: 'fix',
+          outputDir: nonExistentDir,
+          cwd: nonExistentDir,
+          config: {},
+          systemPromptPath: 'prompts/rca-system.md',
+          schemaPath: 'prompts/rca-schema.json',
+        }),
+      (err) => {
+        assert.strictEqual(err.code, 'NOT_FOUND');
+        return true;
+      },
+    );
+  });
+
+  it('finds RCA file in subdirectory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-subdir-'));
+    try {
+      const subDir = join(dir, '2026', '04');
+      mkdirSync(subDir, { recursive: true });
+      writeFakeRcaFile(subDir, 'RCA-2026-04-01-abc5678-sub-fix.md');
+
+      const fakegen = async () => ({
+        rca: makeFakeRca(),
+        cost: 0,
+        sessionId: 'fake',
+        autoFilled: [],
+      });
+
+      const result = await amendRca({
+        id: 'abc5678',
+        correctionHint: 'fix the subdirectory file',
+        outputDir: dir,
+        cwd: dir,
+        config: {},
+        systemPromptPath: 'prompts/rca-system.md',
+        schemaPath: 'prompts/rca-schema.json',
+        _generateFn: fakegen,
+        _buildContextFn: async () => makeFakeContext(),
+        _rebuildManifestFn: async () => {},
+      });
+
+      assert.ok(result.path.includes('RCA-2026-04-01-abc5678-sub-fix.md'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('throws NOT_FOUND when id does not match any file', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-notfound-'));
     try {
@@ -92,9 +145,9 @@ describe('amendRca', () => {
     try {
       writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
 
-      let capturedArgs;
+      let _capturedArgs;
       const fakegen = async (args) => {
-        capturedArgs = args;
+        _capturedArgs = args;
         return { rca: makeFakeRca(), cost: 0, sessionId: 'fake', autoFilled: [] };
       };
 

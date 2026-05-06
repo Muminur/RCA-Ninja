@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -107,7 +107,8 @@ describe('git module behavioral tests', () => {
   it('repoRoot returns the tmp directory path', async () => {
     const { repoRoot } = await import('../../src/util/git.mjs');
     const root = await repoRoot(tmp);
-    assert.strictEqual(root.replace(/\\/g, '/'), tmp.replace(/\\/g, '/'));
+    // macOS: /var is a symlink to /private/var; realpathSync normalizes both sides
+    assert.strictEqual(root.replace(/\\/g, '/'), realpathSync(tmp).replace(/\\/g, '/'));
   });
 
   it('diff excludes package-lock.json', async () => {

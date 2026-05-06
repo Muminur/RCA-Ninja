@@ -335,9 +335,7 @@ export function createProgram() {
                 /* non-blocking */
               }
             } catch (commitErr) {
-              process.stderr.write(
-                `    ✖ skipped (${commitErr.message || String(commitErr)})\n`,
-              );
+              process.stderr.write(`    ✖ skipped (${commitErr.message || String(commitErr)})\n`);
             }
           }
           return;

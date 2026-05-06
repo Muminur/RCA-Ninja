@@ -178,7 +178,9 @@ describe('obsidian sync subcommand', () => {
       createProgram().parseAsync(['node', 'rca', '--cwd', tmp, 'obsidian', 'sync', rcaRelPath]),
     );
     assert.ok(stderr.includes('synced'), 'stderr must confirm sync');
-    const dest = join(vault, 'RCA Inbox', rcaName);
+    // resolveTargetFolder remaps legacy 'RCA Inbox' → 'RCA/<repoName>'
+    const repoName = basename(tmp);
+    const dest = join(vault, 'RCA', repoName, rcaName);
     assert.ok(existsSync(dest), 'RCA must exist in vault target folder');
   });
 

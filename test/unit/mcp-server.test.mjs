@@ -59,7 +59,15 @@ describe('mcp-server CLI subcommand', () => {
 
 // ── Tool registration tests ───────────────────────────────────────────────────
 
-const CORE_TOOL_NAMES = ['rca_generate', 'rca_search', 'rca_recent', 'rca_show'];
+const CORE_TOOL_NAMES = [
+  'rca_generate',
+  'rca_search',
+  'rca_recent',
+  'rca_show',
+  'rca_audit',
+  'rca_trends',
+  'rca_amend',
+];
 const OBSIDIAN_TOOL_NAMES = [
   'obsidian_search',
   'obsidian_read_note',
@@ -76,15 +84,14 @@ describe('getToolsForConfig — conditional tool registration', () => {
     assert.strictEqual(typeof mod.getToolsForConfig, 'function');
   });
 
-  it('registers only 4 core RCA tools when obsidian.enabled is false', async () => {
+  it('registers only 7 core RCA tools when obsidian.enabled is false', async () => {
     const { getToolsForConfig } = await import('../../src/mcp-server.mjs');
     const tools = getToolsForConfig({ obsidian: { enabled: false } });
     const names = tools.map((t) => t.name);
-
     assert.strictEqual(
       tools.length,
-      4,
-      `Expected 4 tools, got ${tools.length}: ${names.join(', ')}`,
+      7,
+      `Expected 7 tools, got ${tools.length}: ${names.join(', ')}`,
     );
     for (const name of CORE_TOOL_NAMES) {
       assert.ok(names.includes(name), `Core tool '${name}' must be present`);
@@ -94,15 +101,15 @@ describe('getToolsForConfig — conditional tool registration', () => {
     }
   });
 
-  it('registers only 4 core RCA tools when obsidian key is absent', async () => {
+  it('registers only 7 core RCA tools when obsidian key is absent', async () => {
     const { getToolsForConfig } = await import('../../src/mcp-server.mjs');
     const tools = getToolsForConfig({});
     const names = tools.map((t) => t.name);
 
     assert.strictEqual(
       tools.length,
-      4,
-      `Expected 4 tools, got ${tools.length}: ${names.join(', ')}`,
+      7,
+      `Expected 7 tools, got ${tools.length}: ${names.join(', ')}`,
     );
     for (const name of CORE_TOOL_NAMES) {
       assert.ok(names.includes(name), `Core tool '${name}' must be present`);
@@ -112,25 +119,68 @@ describe('getToolsForConfig — conditional tool registration', () => {
     }
   });
 
-  it('registers all 11 tools when obsidian.enabled is true', async () => {
+  it('registers all 14 tools when obsidian.enabled is true', async () => {
     const { getToolsForConfig } = await import('../../src/mcp-server.mjs');
     const tools = getToolsForConfig({ obsidian: { enabled: true } });
     const names = tools.map((t) => t.name);
 
     assert.strictEqual(
       tools.length,
-      11,
-      `Expected 11 tools, got ${tools.length}: ${names.join(', ')}`,
+      14,
+      `Expected 14 tools, got ${tools.length}: ${names.join(', ')}`,
     );
     for (const name of [...CORE_TOOL_NAMES, ...OBSIDIAN_TOOL_NAMES]) {
       assert.ok(names.includes(name), `Tool '${name}' must be present when obsidian enabled`);
     }
   });
 
-  it('core tools are exactly: rca_generate, rca_search, rca_recent, rca_show', async () => {
+  it('core tools are exactly the 7 non-obsidian tools', async () => {
     const { getToolsForConfig } = await import('../../src/mcp-server.mjs');
     const tools = getToolsForConfig({ obsidian: { enabled: false } });
     const names = tools.map((t) => t.name).sort();
     assert.deepStrictEqual(names, [...CORE_TOOL_NAMES].sort());
+  });
+});
+
+describe('new core tools — schema validation', () => {
+  it('rca_audit has no required fields', async () => {
+    const { getToolsForConfig } = await import('../../src/mcp-server.mjs');
+    const tools = getToolsForConfig({});
+    const tool = tools.find((t) => t.name === 'rca_audit');
+    assert.ok(tool, 'rca_audit must be present');
+    assert.ok(
+      !tool.inputSchema.required || tool.inputSchema.required.length === 0,
+      'rca_audit must have no required fields',
+    );
+  });
+
+  it('rca_trends has no required fields', async () => {
+    const { getToolsForConfig } = await import('../../src/mcp-server.mjs');
+    const tools = getToolsForConfig({});
+    const tool = tools.find((t) => t.name === 'rca_trends');
+    assert.ok(tool, 'rca_trends must be present');
+    assert.ok(
+      !tool.inputSchema.required || tool.inputSchema.required.length === 0,
+      'rca_trends must have no required fields',
+    );
+  });
+
+  it('rca_amend requires id field', async () => {
+    const { getToolsForConfig } = await import('../../src/mcp-server.mjs');
+    const tools = getToolsForConfig({});
+    const tool = tools.find((t) => t.name === 'rca_amend');
+    assert.ok(tool, 'rca_amend must be present');
+    assert.deepStrictEqual(tool.inputSchema.required, ['id'], 'rca_amend must require id');
+  });
+
+  it('rca_search query field is not required', async () => {
+    const { getToolsForConfig } = await import('../../src/mcp-server.mjs');
+    const tools = getToolsForConfig({});
+    const tool = tools.find((t) => t.name === 'rca_search');
+    assert.ok(tool, 'rca_search must be present');
+    assert.ok(
+      !tool.inputSchema.required || !tool.inputSchema.required.includes('query'),
+      'rca_search query must not be required',
+    );
   });
 });
