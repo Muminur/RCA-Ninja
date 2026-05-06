@@ -19,6 +19,7 @@ import { createProgress } from './progress.mjs';
 import { resolveTemplatePaths } from './template.mjs';
 import { auditCorpus } from './audit.mjs';
 import { findRelatedRcas, readPriorRcas, detectRecurrences } from './dedup.mjs';
+import { runAnalyst } from './analyst.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -274,6 +275,10 @@ export function createProgram() {
     .option('--dry-run', 'Print what would be generated without writing')
     .option('--no-obsidian', 'Skip Obsidian sync')
     .option('--no-secret-scan', 'Skip secret scanning of diff')
+    .option(
+      '--analyze',
+      'Run rca-analyst quality check after generation; prompt to amend on TTY if REVISE/REJECT',
+    )
     .action(async (opts) => {
       const progress = createProgress();
       const overallStart = Date.now();
@@ -412,15 +417,13 @@ export function createProgram() {
         const date = context.timestamp_utc.slice(0, 10);
 
         progress.update('Writing RCA');
-        const { path: writtenPath } = await writeRca({
+        let { path: writtenPath } = await writeRca({
           outputDir: cfg.output_dir,
           content: md,
           date,
           shortHash: context.short_hash,
           title: rca.title,
         });
-
-        process.stdout.write(writtenPath + '\n');
 
         // Rebuild manifest (non-blocking)
         try {
@@ -514,6 +517,63 @@ export function createProgram() {
             process.stderr.write(`⚠ webhook notification failed: ${whErr.message}\n`);
           }
         }
+
+        // Analyst quality check (opt-in via --analyze)
+        if (opts.analyze) {
+          const analystPromptPath = join(__dirname, '..', '.claude', 'agents', 'rca-analyst.md');
+          progress.update('Running quality analyst...');
+          let analystResult = null;
+          try {
+            analystResult = await runAnalyst({
+              writtenPath,
+              systemPromptPath: analystPromptPath,
+              config: cfg,
+            });
+          } catch {
+            process.stderr.write('⚠ Analyst failed — skipping quality check\n');
+          }
+          progress.stop();
+
+          if (analystResult) {
+            process.stderr.write(`Analyst: ${analystResult.verdict}\n`);
+            if (analystResult.verdict !== 'PUBLISH') {
+              process.stderr.write(`${analystResult.findings}\n`);
+              if (process.stdin.isTTY) {
+                const rl = createInterface({ input: process.stdin, output: process.stderr });
+                const answer = await new Promise((resolve) => {
+                  rl.question('Amend now? [y/N] ', resolve);
+                });
+                rl.close();
+                if (answer.trim().toLowerCase() === 'y') {
+                  try {
+                    const { amendRca } = await import('./amend.mjs');
+                    const { resolveTemplatePaths: rtp } = await import('./template.mjs');
+                    const { schemaPath: amendSchema, systemPromptPath: amendPrompt } = rtp(
+                      cwd,
+                      join(__dirname, '..', 'prompts', 'rca-schema.json'),
+                      join(__dirname, '..', 'prompts', 'rca-system.md'),
+                    );
+                    const amended = await amendRca({
+                      id: writtenPath,
+                      correctionHint: analystResult.findings,
+                      outputDir: cfg.output_dir,
+                      cwd,
+                      config: cfg,
+                      systemPromptPath: amendPrompt,
+                      schemaPath: amendSchema,
+                    });
+                    process.stderr.write(`Amended: ${amended.path}\n`);
+                    writtenPath = amended.path;
+                  } catch (amendErr) {
+                    process.stderr.write(`⚠ Amend failed: ${amendErr.message}\n`);
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        process.stdout.write(writtenPath + '\n');
 
         progress.stop(
           `Done in ${((Date.now() - overallStart) / 1000).toFixed(1)}s — ${writtenPath}`,

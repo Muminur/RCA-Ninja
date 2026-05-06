@@ -39,32 +39,33 @@ Your entire bug-fix history becomes a searchable knowledge base — no postmorte
 
 ## Features
 
-|                 | Feature                   | Description                                                                   |
-| --------------- | ------------------------- | ----------------------------------------------------------------------------- |
-| **Automated**   | One-command generation    | `claude-rca generate` analyzes the diff and produces a structured RCA         |
-| **Validated**   | Schema-enforced output    | JSON Schema validation at generation time — no malformed documents            |
-| **Searchable**  | ripgrep-powered search    | Full-text search across your entire RCA corpus in milliseconds                |
-| **Secure**      | Read-only Claude access   | Claude cannot write, edit, or shell out during generation                     |
-| **Atomic**      | Crash-safe writes         | Every file write uses tmp → fsync → rename — no partial files                 |
-| **Hookable**    | Git hook automation       | Auto-generate RCAs on every `fix:` commit in the background                   |
-| **Obsidian**    | Vault sync                | Atomically copies RCAs to your Obsidian vault with daily note links           |
-| **Portable**    | Plain Markdown output     | Works with GitHub, Obsidian, `grep`, `cat` — anything that reads `.md`        |
-| **Quality**     | Auto-fill tracking        | Fields patched by the generator are flagged via `auto_filled` in frontmatter  |
-| **Audit**       | Corpus quality check      | `claude-rca audit` flags degraded RCAs with auto-filled fields                |
-| **Blame**       | Bug introduction tracking | `bug_introduced_by` in frontmatter shows when/who introduced the bug          |
-| **Webhooks**    | Slack/Discord/generic     | POST a notification on RCA generation to any webhook URL                      |
-| **Progress**    | Spinner UX                | TTY-aware spinner with phase markers and elapsed time                         |
-| **Templates**   | Per-project customization | Override schema and prompt via `.claude-rca/` directory                       |
-| **Wizard**      | Interactive setup         | `claude-rca setup` configures vault, API keys, and hooks in one command       |
-| **Dedup**       | Related RCA detection     | Finds duplicate/related RCAs before generating, links them in references      |
-| **Code Diffs**  | Before/After code blocks  | Embeds actual code changes with syntax highlighting in every RCA              |
-| **AI-Native**   | Cross-tool discovery      | AGENTS.md + manifest + rules make RCAs findable by Codex, Cursor, Copilot     |
-| **Per-Project** | Vault folder routing      | Auto-routes RCAs to project-specific Obsidian folders (`RCA/<repo-name>/`)    |
-| **Context**     | Cross-RCA injection       | Injects prior root causes for same files so Claude spots recurrence patterns  |
-| **Backfill**    | Batch historical RCAs     | `generate --since <ref>` creates RCAs for all past `fix:` commits in one run  |
-| **Recurrence**  | `prior_bugs` frontmatter  | Flags repeated failures: manifest entries sharing files appear in frontmatter |
-| **Trends**      | Corpus aggregation        | `claude-rca trends` shows hot files, top tags, and repeat offender areas      |
-| **Amend**       | Correction re-generation  | `claude-rca amend <id> --hint "..."` re-runs Claude with a fix note in place  |
+|                 | Feature                   | Description                                                                                   |
+| --------------- | ------------------------- | --------------------------------------------------------------------------------------------- |
+| **Automated**   | One-command generation    | `claude-rca generate` analyzes the diff and produces a structured RCA                         |
+| **Validated**   | Schema-enforced output    | JSON Schema validation at generation time — no malformed documents                            |
+| **Searchable**  | ripgrep-powered search    | Full-text search across your entire RCA corpus in milliseconds                                |
+| **Secure**      | Read-only Claude access   | Claude cannot write, edit, or shell out during generation                                     |
+| **Atomic**      | Crash-safe writes         | Every file write uses tmp → fsync → rename — no partial files                                 |
+| **Hookable**    | Git hook automation       | Auto-generate RCAs on every `fix:` commit in the background                                   |
+| **Obsidian**    | Vault sync                | Atomically copies RCAs to your Obsidian vault with daily note links                           |
+| **Portable**    | Plain Markdown output     | Works with GitHub, Obsidian, `grep`, `cat` — anything that reads `.md`                        |
+| **Quality**     | Auto-fill tracking        | Fields patched by the generator are flagged via `auto_filled` in frontmatter                  |
+| **Audit**       | Corpus quality check      | `claude-rca audit` flags degraded RCAs with auto-filled fields                                |
+| **Blame**       | Bug introduction tracking | `bug_introduced_by` in frontmatter shows when/who introduced the bug                          |
+| **Webhooks**    | Slack/Discord/generic     | POST a notification on RCA generation to any webhook URL                                      |
+| **Progress**    | Spinner UX                | TTY-aware spinner with phase markers and elapsed time                                         |
+| **Templates**   | Per-project customization | Override schema and prompt via `.claude-rca/` directory                                       |
+| **Wizard**      | Interactive setup         | `claude-rca setup` configures vault, API keys, and hooks in one command                       |
+| **Dedup**       | Related RCA detection     | Finds duplicate/related RCAs before generating, links them in references                      |
+| **Code Diffs**  | Before/After code blocks  | Embeds actual code changes with syntax highlighting in every RCA                              |
+| **AI-Native**   | Cross-tool discovery      | AGENTS.md + manifest + rules make RCAs findable by Codex, Cursor, Copilot                     |
+| **Per-Project** | Vault folder routing      | Auto-routes RCAs to project-specific Obsidian folders (`RCA/<repo-name>/`)                    |
+| **Context**     | Cross-RCA injection       | Injects prior root causes for same files so Claude spots recurrence patterns                  |
+| **Backfill**    | Batch historical RCAs     | `generate --since <ref>` creates RCAs for all past `fix:` commits in one run                  |
+| **Recurrence**  | `prior_bugs` frontmatter  | Flags repeated failures: manifest entries sharing files appear in frontmatter                 |
+| **Trends**      | Corpus aggregation        | `claude-rca trends` shows hot files, top tags, and repeat offender areas                      |
+| **Amend**       | Correction re-generation  | `claude-rca amend <id> --hint "..."` re-runs Claude with a fix note in place                  |
+| **Analyst**     | Quality auto-check        | `generate --analyze` runs `rca-analyst` after write; prompts to amend on TTY if REVISE/REJECT |
 
 ---
 
@@ -137,6 +138,9 @@ claude-rca generate --from HEAD~3
 
 # 5b. Backfill RCAs for all past fix: commits since a tag/ref
 claude-rca generate --since v1.0.0
+
+# 5c. Generate with quality analyst check (prompts to amend if quality is low)
+claude-rca generate --analyze
 
 # 6. Search your corpus
 claude-rca search "null pointer"
@@ -251,7 +255,7 @@ claude-rca/
 │   ├── obsidian.mjs        # Vault sync + daily note append
 │   ├── renderer.mjs        # JSON → Markdown with frontmatter
 │   ├── schema.mjs          # AJV schema compilation
-│   ├── search.mjs          # Manifest + ripgrep hybrid search with token caps
+│   ├── search.mjs          # Manifest + ripgrep hybrid search; --files post-filters by manifest
 │   ├── slug.mjs            # Deterministic URL-safe slug generation
 │   ├── writer.mjs          # Atomic file writer with collision handling
 │   ├── audit.mjs           # RCA corpus quality auditing
@@ -262,6 +266,7 @@ claude-rca/
 │   ├── obsidian-api.mjs    # REST API client for Obsidian Local REST API
 │   ├── manifest.mjs        # Auto-generated JSONL manifest for AI discovery
 │   ├── mcp-server.mjs      # MCP protocol server (7 core + 7 conditional tools)
+│   ├── analyst.mjs         # rca-analyst quality verdict runner
 │   └── util/
 │       ├── exec.mjs        # Safe spawn wrapper (no shell)
 │       ├── fs.mjs          # atomicWrite, acquireLock, releaseLock

@@ -102,4 +102,12 @@ describe('acquireLock / releaseLock', () => {
     assert.doesNotThrow(() => acquireLock(lockPath));
     releaseLock(lockPath);
   });
+
+  it('propagates non-EEXIST errors from openSync (e.g. ENOENT when parent is absent)', () => {
+    const lockPath = join(tmp, 'missing-dir', '.lock');
+    assert.throws(
+      () => acquireLock(lockPath),
+      (err) => err.code === 'ENOENT',
+    );
+  });
 });

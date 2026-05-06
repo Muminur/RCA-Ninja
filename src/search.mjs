@@ -149,6 +149,21 @@ export async function search({ outputDir, query, tag, since, files, json }) {
     results = results.filter((r) => r.mtime && new Date(r.mtime) >= sinceDate);
   }
 
+  // Post-filter by manifest files array when both query and files are given.
+  // Manifest is source-of-truth: rg hits whose RCA path is not in the manifest
+  // files-filtered set are dropped. If manifest absent, skip (pass-through).
+  if (files) {
+    const entries = loadManifest(outputDir);
+    if (entries.length > 0) {
+      const allowedPaths = new Set(
+        entries
+          .filter((e) => Array.isArray(e.files) && e.files.some((f) => String(f).includes(files)))
+          .map((e) => join(outputDir, e.path)),
+      );
+      results = results.filter((r) => allowedPaths.has(r.path));
+    }
+  }
+
   if (json) {
     return results;
   }
