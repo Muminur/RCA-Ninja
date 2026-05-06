@@ -140,6 +140,31 @@ describe('runAnalyst', () => {
     }
   });
 
+  it('throws SCHEMA_VALIDATION when analyst output is not valid JSON', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-json-'));
+    try {
+      const rcaPath = makeFakeRcaFile(dir);
+      const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
+      const { RcaError } = await import('../../src/errors.mjs');
+      await assert.rejects(
+        () =>
+          runAnalyst({
+            writtenPath: rcaPath,
+            systemPromptPath,
+            config: {},
+            _spawnFn: async () => ({ stdout: 'not-valid-json-at-all' }),
+          }),
+        (err) => {
+          assert.ok(err instanceof RcaError);
+          assert.strictEqual(err.code, 'SCHEMA_VALIDATION');
+          return true;
+        },
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('throws RcaError on spawn failure', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-fail-'));
     try {

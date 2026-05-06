@@ -206,4 +206,26 @@ describe('config', () => {
       else delete process.env.OBSIDIAN_PORT;
     }
   });
+
+  it('gracefully ignores a project config file with invalid JSON', () => {
+    // covers tryLoadJson catch block (lines 65-66 of config.mjs)
+    writeFileSync(join(tmp, '.claude-rca.json'), 'not valid {{{ json');
+    const cfg = loadConfig({ cwd: tmp });
+    assert.strictEqual(cfg.version, 1, 'must fall back to defaults when JSON is unparseable');
+  });
+
+  it('loads config from CLAUDE_RCA_CONFIG environment variable', () => {
+    // covers lines 85-87 of config.mjs
+    const envCfgPath = join(tmp, 'env-override.json');
+    writeFileSync(envCfgPath, JSON.stringify({ version: 1, claude: { timeout_ms: 45000 } }));
+    const orig = process.env.CLAUDE_RCA_CONFIG;
+    process.env.CLAUDE_RCA_CONFIG = envCfgPath;
+    try {
+      const cfg = loadConfig({ cwd: tmp });
+      assert.strictEqual(cfg.claude.timeout_ms, 45000);
+    } finally {
+      if (orig !== undefined) process.env.CLAUDE_RCA_CONFIG = orig;
+      else delete process.env.CLAUDE_RCA_CONFIG;
+    }
+  });
 });
