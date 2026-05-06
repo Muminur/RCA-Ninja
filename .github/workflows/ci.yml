@@ -50,7 +50,7 @@ jobs:
         run: node --test $(find test/e2e -name "*.test.mjs" | sort)
 
       - name: Coverage gate
-        run: c8 --include "src/**/*.mjs" --exclude "src/mcp-server.mjs" --check-coverage --lines 83 node --test $(find test/unit test/integration -name "*.test.mjs" | sort)
+        run: npx c8 --include "src/**/*.mjs" --exclude "src/mcp-server.mjs" --check-coverage --lines 83 node --test $(find test/unit test/integration -name "*.test.mjs" | sort)
 
       - name: Grep gate - no child_process.exec
         run: "! git grep -nE 'child_process\\.exec\\(' -- 'src/**' || (echo 'FAIL: child_process.exec found in src/' && exit 1)"
