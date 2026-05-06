@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, readdirSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -84,6 +84,22 @@ describe('acquireLock / releaseLock', () => {
     const lockPath = join(tmp, '.lock');
     acquireLock(lockPath);
     assert.throws(() => acquireLock(lockPath));
+    releaseLock(lockPath);
+  });
+
+  it('releaseLock does not throw when file does not exist', () => {
+    const lockPath = join(tmp, '.lock-nonexistent');
+    assert.doesNotThrow(() => releaseLock(lockPath));
+  });
+
+  it('removes a stale lock (mtime older than 5 minutes) and acquires fresh lock', () => {
+    const lockPath = join(tmp, '.stale-lock');
+    acquireLock(lockPath);
+    // Backdate the mtime to 10 minutes ago so it's considered stale
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(lockPath, tenMinutesAgo, tenMinutesAgo);
+    // Acquiring again should succeed because it detects and removes the stale lock
+    assert.doesNotThrow(() => acquireLock(lockPath));
     releaseLock(lockPath);
   });
 });

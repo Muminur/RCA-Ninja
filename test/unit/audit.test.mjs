@@ -100,6 +100,13 @@ describe('auditCorpus', () => {
     assert.strictEqual(result.degraded.length, 0);
     assert.strictEqual(result.clean_count, 1);
   });
+
+  it('returns empty result when outputDir does not exist', () => {
+    const nonExistentDir = join(tmpdir(), 'claude-rca-audit-nodir-' + Date.now());
+    const result = auditCorpus({ outputDir: nonExistentDir });
+    assert.strictEqual(result.degraded.length, 0);
+    assert.strictEqual(result.clean_count, 0);
+  });
 });
 
 describe('audit CLI command', () => {

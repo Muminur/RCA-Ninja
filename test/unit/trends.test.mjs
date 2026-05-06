@@ -11,10 +11,7 @@ import { computeTrends } from '../../src/trends.mjs';
  * tests have zero dependency on the manifest-build logic.
  */
 function writeManifest(dir, entries) {
-  const headerLines = [
-    '# Auto-generated test manifest',
-    `# Count: ${entries.length}`,
-  ];
+  const headerLines = ['# Auto-generated test manifest', `# Count: ${entries.length}`];
   const jsonLines = entries.map((e) => JSON.stringify(e));
   const content = [...headerLines, ...jsonLines].join('\n') + '\n';
   writeFileSync(join(dir, '_manifest.jsonl'), content, 'utf8');

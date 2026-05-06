@@ -313,7 +313,10 @@ describe('renderer', () => {
     assert.ok(md.includes('**Before**'), 'should include **Before** when non-empty');
     assert.ok(md.includes('**After**'), 'should include **After** when non-empty');
     assert.ok(!md.includes('**New Code**'), 'should not use **New Code** when both sides present');
-    assert.ok(!md.includes('**Removed Code**'), 'should not use **Removed Code** when both sides present');
+    assert.ok(
+      !md.includes('**Removed Code**'),
+      'should not use **Removed Code** when both sides present',
+    );
   });
 
   // --- description and components in frontmatter ---
@@ -417,6 +420,10 @@ describe('renderer', () => {
     assert.strictEqual(parsed.data.prior_bugs[0].id, 'RCA-2026-04-20-abc1234');
     assert.strictEqual(parsed.data.prior_bugs[0].title, 'Auth session fix');
     assert.strictEqual(parsed.data.prior_bugs[0].date, '2026-04-20');
-    assert.strictEqual(parsed.data.prior_bugs[1].title, 'Session: null pointer bug', 'title with colon should round-trip');
+    assert.strictEqual(
+      parsed.data.prior_bugs[1].title,
+      'Session: null pointer bug',
+      'title with colon should round-trip',
+    );
   });
 });

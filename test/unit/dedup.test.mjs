@@ -137,7 +137,10 @@ describe('readPriorRcas', () => {
 
   it('returns root_cause text from related RCA files', () => {
     const dir = createPriorRcaCorpus();
-    const results = readPriorRcas({ outputDir: dir, filesChanged: ['src/auth.js', 'src/session.js'] });
+    const results = readPriorRcas({
+      outputDir: dir,
+      filesChanged: ['src/auth.js', 'src/session.js'],
+    });
     assert.ok(results.length >= 1, 'should return at least one result');
     const first = results[0];
     assert.ok(
@@ -152,7 +155,10 @@ describe('readPriorRcas', () => {
 
   it('truncates root_cause to 500 chars', () => {
     const dir = createPriorRcaCorpus({ longRootCause: true });
-    const results = readPriorRcas({ outputDir: dir, filesChanged: ['src/auth.js', 'src/session.js'] });
+    const results = readPriorRcas({
+      outputDir: dir,
+      filesChanged: ['src/auth.js', 'src/session.js'],
+    });
     assert.ok(results.length >= 1, 'should return at least one result');
     assert.ok(
       results[0].root_cause.length <= 500,
@@ -165,15 +171,25 @@ describe('readPriorRcas', () => {
     // src/session.js overlaps with rca1, rca2, rca4 (3 files) — all have >50% overlap with ['src/session.js']
     // With filesChanged=['src/session.js'], overlap_score = 1/1 = 1.0 for all three with session.js
     const resultsDefault = readPriorRcas({ outputDir: dir, filesChanged: ['src/session.js'] });
-    assert.ok(resultsDefault.length <= 3, `default limit should be 3, got ${resultsDefault.length}`);
+    assert.ok(
+      resultsDefault.length <= 3,
+      `default limit should be 3, got ${resultsDefault.length}`,
+    );
 
-    const resultsLimit1 = readPriorRcas({ outputDir: dir, filesChanged: ['src/session.js'], limit: 1 });
+    const resultsLimit1 = readPriorRcas({
+      outputDir: dir,
+      filesChanged: ['src/session.js'],
+      limit: 1,
+    });
     assert.strictEqual(resultsLimit1.length, 1, 'limit:1 should return exactly 1 result');
   });
 
   it('returns title, root_cause, date, files per entry', () => {
     const dir = createPriorRcaCorpus();
-    const results = readPriorRcas({ outputDir: dir, filesChanged: ['src/auth.js', 'src/session.js'] });
+    const results = readPriorRcas({
+      outputDir: dir,
+      filesChanged: ['src/auth.js', 'src/session.js'],
+    });
     assert.ok(results.length >= 1);
     const entry = results[0];
     assert.ok(typeof entry.title === 'string', 'title should be a string');
@@ -196,8 +212,18 @@ describe('detectRecurrences', () => {
 
   it('returns entries sharing files with filesChanged', () => {
     const dir = createManifestCorpus([
-      { id: 'RCA-2026-04-20-abc1234', title: 'Auth fix', date: '2026-04-20', files: ['src/auth.js', 'src/session.js'] },
-      { id: 'RCA-2026-04-15-def5678', title: 'DB timeout', date: '2026-04-15', files: ['src/db.js'] },
+      {
+        id: 'RCA-2026-04-20-abc1234',
+        title: 'Auth fix',
+        date: '2026-04-20',
+        files: ['src/auth.js', 'src/session.js'],
+      },
+      {
+        id: 'RCA-2026-04-15-def5678',
+        title: 'DB timeout',
+        date: '2026-04-15',
+        files: ['src/db.js'],
+      },
     ]);
     const results = detectRecurrences({ outputDir: dir, filesChanged: ['src/auth.js'] });
     assert.strictEqual(results.length, 1);
@@ -206,7 +232,12 @@ describe('detectRecurrences', () => {
 
   it('does not return entries with no overlapping files', () => {
     const dir = createManifestCorpus([
-      { id: 'RCA-2026-04-15-def5678', title: 'DB timeout', date: '2026-04-15', files: ['src/db.js'] },
+      {
+        id: 'RCA-2026-04-15-def5678',
+        title: 'DB timeout',
+        date: '2026-04-15',
+        files: ['src/db.js'],
+      },
     ]);
     const results = detectRecurrences({ outputDir: dir, filesChanged: ['src/auth.js'] });
     assert.strictEqual(results.length, 0);
@@ -238,7 +269,12 @@ describe('detectRecurrences', () => {
 
   it('returns id, title, date per entry', () => {
     const dir = createManifestCorpus([
-      { id: 'RCA-2026-04-20-abc1234', title: 'Auth fix', date: '2026-04-20', files: ['src/auth.js'] },
+      {
+        id: 'RCA-2026-04-20-abc1234',
+        title: 'Auth fix',
+        date: '2026-04-20',
+        files: ['src/auth.js'],
+      },
     ]);
     const results = detectRecurrences({ outputDir: dir, filesChanged: ['src/auth.js'] });
     assert.strictEqual(results.length, 1);

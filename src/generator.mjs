@@ -24,12 +24,22 @@ export function buildContextPayload({ context, priorRcas, diffFile }) {
   };
 }
 
-export async function generate({ context, config, systemPromptPath, schemaPath, correctionHint, priorRcas }) {
+export async function generate({
+  context,
+  config,
+  systemPromptPath,
+  schemaPath,
+  correctionHint,
+  priorRcas,
+}) {
   const contextFile = join(tmpdir(), `claude-rca-ctx-${randomUUID()}.json`);
   const diffFile = join(tmpdir(), `claude-rca-diff-${randomUUID()}.txt`);
 
   try {
-    writeFileSync(contextFile, JSON.stringify(buildContextPayload({ context, priorRcas, diffFile })));
+    writeFileSync(
+      contextFile,
+      JSON.stringify(buildContextPayload({ context, priorRcas, diffFile })),
+    );
     writeFileSync(diffFile, context.diff);
 
     const systemPrompt = readFileSync(systemPromptPath, 'utf8');

@@ -42,9 +42,7 @@ export async function computeTrends({ outputDir }) {
   }
 
   const sortDesc = (map) => {
-    const sorted = Object.fromEntries(
-      [...map.entries()].sort((a, b) => b[1] - a[1]),
-    );
+    const sorted = Object.fromEntries([...map.entries()].sort((a, b) => b[1] - a[1]));
     return sorted;
   };
 
