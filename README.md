@@ -1,8 +1,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?logo=nodedotjs&logoColor=white" alt="Node.js >= 20" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" />
-  <img src="https://img.shields.io/badge/tests-472%20passed-brightgreen" alt="472 Tests" />
-  <img src="https://img.shields.io/badge/coverage-83%25-brightgreen" alt="83% Coverage" />
+  <img src="https://img.shields.io/badge/tests-520%20passed-brightgreen" alt="520 Tests" />
+  <img src="https://img.shields.io/badge/coverage-84%25-brightgreen" alt="84% Coverage" />
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="v0.1.0" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Cross-platform" />
 </p>
@@ -833,7 +833,7 @@ npm test                  # unit tests
 npm run test:integration  # integration tests
 npm run test:e2e          # e2e tests with claude-stub
 npm run coverage          # c8 report (target ≥83%)
-npm run check             # lint + typecheck + test + coverage gate (367 total)
+npm run check             # lint + typecheck + test + coverage gate (520 total)
 npm run lint              # eslint + prettier
 npm run format            # auto-format with prettier
 ```
