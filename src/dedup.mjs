@@ -72,12 +72,12 @@ function toDateString(val) {
 
 /**
  * Returns up to `limit` prior RCAs related to `filesChanged`, reading their full
- * markdown to extract root_cause text.
+ * markdown to extract root_cause text. This is the disk-based fallback implementation.
  *
  * @param {{ outputDir: string, filesChanged: string[], limit?: number }} opts
  * @returns {Array<{ title: string, root_cause: string, date: string, files: string[] }>}
  */
-export function readPriorRcas({ outputDir, filesChanged, limit = 3 }) {
+export function readPriorRcasFromDisk({ outputDir, filesChanged, limit = 3 }) {
   const related = findRelatedRcas({ outputDir, filesChanged });
   const top = related.slice(0, limit);
 
@@ -100,6 +100,79 @@ export function readPriorRcas({ outputDir, filesChanged, limit = 3 }) {
   }
   return results;
 }
+
+/**
+ * Returns up to `limit` prior RCAs using manifest snippets — zero full-file reads.
+ * Falls back to full file read only if root_cause_snippet is absent from the manifest,
+ * or to readPriorRcasFromDisk if the manifest itself is missing/empty.
+ *
+ * @param {{ outputDir: string, filesChanged: string[], limit?: number }} opts
+ * @returns {Array<{ title: string, root_cause: string, date: string, files: string[] }>}
+ */
+export function readPriorRcasFromManifest({ outputDir, filesChanged, limit = 3 }) {
+  // 1. Load manifest
+  const entries = loadManifest(outputDir);
+  if (entries.length === 0) {
+    // Fall back to original disk-based implementation
+    return readPriorRcasFromDisk({ outputDir, filesChanged, limit });
+  }
+
+  // 2. Score entries by file overlap (same algorithm as findRelatedRcas)
+  const changedSet = new Set(filesChanged || []);
+  if (changedSet.size === 0) return [];
+
+  const scored = [];
+  for (const entry of entries) {
+    if (!Array.isArray(entry.files)) continue;
+    const shared = entry.files.filter((f) => changedSet.has(f));
+    const score = shared.length / changedSet.size;
+    if (score > 0.5) {
+      scored.push({ entry, score });
+    }
+  }
+
+  scored.sort(
+    (a, b) => b.score - a.score || (b.entry.date || '').localeCompare(a.entry.date || ''),
+  );
+  const top = scored.slice(0, limit);
+
+  // 3. Build result — use snippet from manifest, fall back to file read only if snippet missing
+  const results = [];
+  for (const { entry } of top) {
+    const root_cause = entry.root_cause_snippet || '';
+    if (!root_cause && entry.path) {
+      // Fallback: read full file only if no snippet available
+      const fullPath = join(outputDir, entry.path);
+      try {
+        const content = readFileSync(fullPath, 'utf8');
+        const { data, content: body } = matter(content);
+        const extracted = extractRootCause(body).slice(0, 500);
+        results.push({
+          title: entry.title,
+          root_cause: extracted,
+          date: toDateString(data.date),
+          files: Array.isArray(data.files) ? data.files : [],
+        });
+        continue;
+      } catch {
+        /* skip unreadable files */
+      }
+    }
+    results.push({
+      title: entry.title,
+      root_cause,
+      date: entry.date || '',
+      files: Array.isArray(entry.files) ? entry.files : [],
+    });
+  }
+  return results;
+}
+
+/**
+ * Backwards-compatible alias — points to readPriorRcasFromManifest (the fast path).
+ * All existing callers (cli.mjs, amend.mjs) continue to work without changes.
+ */
+export const readPriorRcas = readPriorRcasFromManifest;
 
 /**
  * Returns up to 5 manifest entries that share at least one file with `filesChanged`,
