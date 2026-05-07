@@ -1,8 +1,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?logo=nodedotjs&logoColor=white" alt="Node.js >= 20" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" />
-  <img src="https://img.shields.io/badge/tests-367%20passed-brightgreen" alt="367 Tests" />
-  <img src="https://img.shields.io/badge/coverage-85%25-brightgreen" alt="85% Coverage" />
+  <img src="https://img.shields.io/badge/tests-472%20passed-brightgreen" alt="472 Tests" />
+  <img src="https://img.shields.io/badge/coverage-83%25-brightgreen" alt="83% Coverage" />
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="v0.1.0" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Cross-platform" />
 </p>
@@ -284,7 +284,7 @@ claude-rca/
 ├── .env.example            # Template for Obsidian API credentials
 ├── AGENTS.md               # Cross-tool AI discovery (Codex, Cursor, Copilot)
 ├── .claudeignore           # Excludes rca/ from incidental Claude Code scans
-└── test/                   # 367 tests (unit + integration + e2e)
+└── test/                   # 472 tests (unit + integration + e2e)
 ```
 
 ---
@@ -390,6 +390,8 @@ All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
 | `claude-rca setup`             | Interactive setup wizard                              |
 | `claude-rca audit`             | Check RCA quality — flag auto-filled fields           |
 | `claude-rca rebuild`           | Re-validate RCAs against current schema               |
+| `claude-rca amend <id>`        | Re-generate an existing RCA in place with a fix hint  |
+| `claude-rca trends`            | Show hot files, top tags, and repeat bug areas        |
 | `claude-rca obsidian sync-all` | Sync all RCAs to Obsidian vault                       |
 
 ### Generate Options
@@ -398,12 +400,14 @@ All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
 
 claude-rca generate [options]
 
---from <ref> Git ref to analyze (default: HEAD)
---message <msg> Override the commit message
---logs <file> Attach a log file to the analysis context
---dry-run Print the would-be output path without writing
---no-obsidian Skip Obsidian sync even if configured
---no-secret-scan Skip scanning the diff for secrets
+--from <ref>         Git ref to analyze (default: HEAD)
+--since <ref>        Generate RCAs for all fix: commits since a git ref/tag
+--message <msg>      Override the commit message
+--logs <file>        Attach a log file to the analysis context
+--dry-run            Print the would-be output path without writing
+--no-obsidian        Skip Obsidian sync even if configured
+--no-secret-scan     Skip scanning the diff for secrets
+--analyze            Run rca-analyst quality check after generation
 
 ```
 
@@ -418,6 +422,27 @@ claude-rca search [query] [options]
 --files <path> Find RCAs affecting a source file (manifest-backed)
 --limit <n> Maximum results to return (default: 20)
 --json Output results as JSON
+
+```
+
+### Amend Options
+
+```
+
+claude-rca amend <id> [options]
+
+--hint <text>        Correction note passed to Claude for the re-generation
+--cwd <path>         Working directory (default: current directory)
+
+```
+
+### Trends Options
+
+```
+
+claude-rca trends [options]
+
+--json               Output results as JSON
 
 ```
 

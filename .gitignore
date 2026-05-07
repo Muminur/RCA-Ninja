@@ -24,6 +24,17 @@ TASKS.md
 RCA_PRD.md
 docs/**/*.md
 
+# Claude Code workflow agents (internal scaffolding, not product content)
+.claude/agents/branch-reviewer.md
+.claude/agents/ci-guard.md
+.claude/agents/code-reviewer.md
+.claude/agents/implementer.md
+.claude/agents/merger.md
+.claude/agents/planner.md
+.claude/agents/security-reviewer.md
+.claude/agents/tdd-author.md
+.claude/settings.json
+
 # Local-only docs (tracked locally, not pushed)
 docs/architecture.md
 docs/prompts.md
