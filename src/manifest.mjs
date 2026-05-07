@@ -3,6 +3,12 @@ import { join, relative } from 'node:path';
 import matter from 'gray-matter';
 import { atomicWrite } from './util/fs.mjs';
 
+function extractSection(body, heading) {
+  const match = body.match(new RegExp(`^## ${heading}\\s*\\n([\\s\\S]*?)(?=\\n## |\\s*$)`, 'm'));
+  if (!match) return '';
+  return match[1].trim();
+}
+
 function toDateString(val) {
   if (!val) return '';
   if (val instanceof Date) return val.toISOString().slice(0, 10);
@@ -28,7 +34,7 @@ export async function rebuildManifest(outputDir) {
       } else if (item.name.endsWith('.md') && !item.name.startsWith('_')) {
         try {
           const content = readFileSync(fullPath, 'utf8');
-          const { data } = matter(content);
+          const { data, content: body } = matter(content);
           if (data.title && data.ref) {
             const dateStr = toDateString(data.date);
             entries.push({
@@ -41,6 +47,8 @@ export async function rebuildManifest(outputDir) {
               components: data.components || [],
               files: data.files || [],
               description: data.description || '',
+              root_cause_snippet: extractSection(body, 'Root Cause').slice(0, 200),
+              fix_snippet: extractSection(body, 'Fix').slice(0, 150),
               path: relative(outputDir, fullPath).replace(/\\/g, '/'),
             });
           }

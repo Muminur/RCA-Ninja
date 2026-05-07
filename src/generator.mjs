@@ -6,7 +6,19 @@ import { run } from './util/exec.mjs';
 import { validateRca } from './schema.mjs';
 import { RcaError } from './errors.mjs';
 
-const SECRET_REGEX = /(api[_-]?key|secret|password|token)\s*[:=]\s*["']?[A-Za-z0-9+/=]{16,}/i;
+const SECRET_REGEX = new RegExp(
+  [
+    // key=value style: api_key, secret, password, token followed by assignment
+    '(api[_-]?key|secret|password|token)\\s*[:=]\\s*["\']?[A-Za-z0-9+/=]{16,}',
+    // AWS access key IDs: AKIA/ASIA/AROA + 16 uppercase alphanumeric chars
+    'A(?:KIA|SIA|ROA)[0-9A-Z]{16}',
+    // Stripe/generic service keys: sk_live_, sk_test_, pk_live_, rk_live_
+    '(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{20,}',
+    // JWT Bearer tokens: "Bearer eyJ..."
+    'Bearer\\s+eyJ[A-Za-z0-9_-]{20,}',
+  ].join('|'),
+  'i',
+);
 
 export function scanForSecrets(diff) {
   return SECRET_REGEX.test(diff);
@@ -78,9 +90,9 @@ export async function generate({
           const raw = jsonMatch ? jsonMatch[1].trim() : parsed.result.trim();
           try {
             rcaData = JSON.parse(raw);
-          } catch {
+          } catch (parseErr) {
             throw new RcaError('SCHEMA_VALIDATION', {
-              ajv_first_error: 'Could not parse RCA JSON from claude output',
+              ajv_first_error: `Could not parse RCA JSON from claude output: ${parseErr.message}`,
             });
           }
         }

@@ -7,6 +7,7 @@ import { buildContext } from './context.mjs';
 import { generate } from './generator.mjs';
 import { renderRca } from './renderer.mjs';
 import { rebuildManifest } from './manifest.mjs';
+import { readPriorRcas } from './dedup.mjs';
 
 /**
  * Walk outputDir recursively and return all .md files (not starting with _).
@@ -60,6 +61,7 @@ export async function amendRca({
   _generateFn = generate,
   _buildContextFn = buildContext,
   _rebuildManifestFn = rebuildManifest,
+  _readPriorRcasFn = readPriorRcas,
 }) {
   // Find the matching .md file
   const allFiles = walkMdFiles(outputDir);
@@ -78,13 +80,17 @@ export async function amendRca({
   // Build context using the original commit ref
   const context = await _buildContextFn({ cwd, ref });
 
-  // Generate the updated RCA (passing correctionHint through)
+  // Load prior RCAs for recurrence context (same as initial generation)
+  const priorRcas = _readPriorRcasFn({ outputDir, filesChanged: context.files_changed });
+
+  // Generate the updated RCA (passing correctionHint and prior context through)
   const { rca } = await _generateFn({
     context,
     config,
     systemPromptPath,
     schemaPath,
     correctionHint,
+    priorRcas,
   });
 
   // Render and write atomically (overwrite in place)

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { amendRca } from '../../src/amend.mjs';
+import { scanForSecrets } from '../../src/generator.mjs';
 
 /** Minimal context object satisfying renderer.mjs requirements */
 function makeFakeContext(overrides = {}) {
@@ -298,5 +299,84 @@ describe('amendRca', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('passes priorRcas from _readPriorRcasFn to _generateFn', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-priorrcas-'));
+    try {
+      writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
+
+      const fakePriorRcas = [
+        { title: 'Old bug', root_cause: 'A prior cause', date: '2025-01-01', files: ['src/foo.mjs'] },
+      ];
+
+      let capturedGenerateArgs;
+      const fakegen = async (args) => {
+        capturedGenerateArgs = args;
+        return { rca: makeFakeRca(), cost: 0, sessionId: 'fake', autoFilled: [] };
+      };
+
+      let readPriorRcasCalledWith;
+      const fakeReadPriorRcas = (opts) => {
+        readPriorRcasCalledWith = opts;
+        return fakePriorRcas;
+      };
+
+      await amendRca({
+        id: 'abc1234',
+        correctionHint: 'fix',
+        outputDir: dir,
+        cwd: dir,
+        config: {},
+        systemPromptPath: 'prompts/rca-system.md',
+        schemaPath: 'prompts/rca-schema.json',
+        _generateFn: fakegen,
+        _buildContextFn: async () => makeFakeContext({ files_changed: ['src/foo.mjs'] }),
+        _rebuildManifestFn: async () => {},
+        _readPriorRcasFn: fakeReadPriorRcas,
+      });
+
+      assert.ok(readPriorRcasCalledWith, '_readPriorRcasFn should have been called');
+      assert.strictEqual(readPriorRcasCalledWith.outputDir, dir, 'outputDir passed correctly');
+      assert.deepStrictEqual(
+        readPriorRcasCalledWith.filesChanged,
+        ['src/foo.mjs'],
+        'filesChanged from context passed correctly',
+      );
+      assert.ok(capturedGenerateArgs, '_generateFn should have been called');
+      assert.deepStrictEqual(
+        capturedGenerateArgs.priorRcas,
+        fakePriorRcas,
+        'priorRcas should be passed from _readPriorRcasFn to _generateFn',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('scanForSecrets', () => {
+  it('catches api_key = value patterns', () => {
+    assert.strictEqual(scanForSecrets('api_key: "abcdef1234567890"'), true);
+  });
+
+  it('catches AWS access key format (AKIA...)', () => {
+    assert.strictEqual(scanForSecrets('+AKIAIOSFODNN7EXAMPLE'), true);
+  });
+
+  it('catches Stripe-style sk_live_ keys', () => {
+    // Split to avoid triggering secret scanners on the test file itself
+    const fakeStripeKey = 'sk_live_' + 'abc123def456ghi789jkl012';
+    assert.strictEqual(scanForSecrets(fakeStripeKey), true);
+  });
+
+  it('catches JWT Bearer tokens', () => {
+    // Split to avoid triggering secret scanners on the test file itself
+    const fakeJwt = 'Authorization: Bearer ' + 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
+    assert.strictEqual(scanForSecrets(fakeJwt), true);
+  });
+
+  it('does not flag normal diff content', () => {
+    assert.strictEqual(scanForSecrets('const x = 1;\n+const y = 2;'), false);
   });
 });

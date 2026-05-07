@@ -5,6 +5,27 @@ import { RcaError } from './errors.mjs';
 const MAX_DIFF_BYTES = 200 * 1024;
 
 /**
+ * Truncate a unified diff at hunk boundaries so we never send Claude a half-hunk.
+ * Returns { content, truncated }.
+ * @param {string} diff
+ * @param {number} maxBytes
+ * @returns {{ content: string, truncated: boolean }}
+ */
+export function truncateDiff(diff, maxBytes = MAX_DIFF_BYTES) {
+  if (Buffer.byteLength(diff) <= maxBytes) return { content: diff, truncated: false };
+
+  // Split on hunk headers (@@) preserving the delimiter at the start of each chunk
+  const parts = diff.split(/(?=^@@)/m);
+  let result = '';
+  for (const part of parts) {
+    const candidate = result + part;
+    if (Buffer.byteLength(candidate) > maxBytes) break;
+    result = candidate;
+  }
+  return { content: result, truncated: true };
+}
+
+/**
  * Find the commit that last touched any of the given files before the fix commit.
  * Returns { commit, author, date } or null.
  * @param {string[]} filesChanged - list of files changed by the fix commit
@@ -68,12 +89,7 @@ export async function buildContext({ cwd = process.cwd(), ref = 'HEAD', logs = n
     throw new RcaError('NO_DIFF', { ref });
   }
 
-  let diffContent = rawDiff;
-  let diffTruncated = false;
-  if (Buffer.byteLength(diffContent) > MAX_DIFF_BYTES) {
-    diffContent = diffContent.slice(0, MAX_DIFF_BYTES);
-    diffTruncated = true;
-  }
+  const { content: diffContent, truncated: diffTruncated } = truncateDiff(rawDiff);
 
   const isoDate = new Date(ts).toISOString().replace(/\.\d{3}Z$/, 'Z');
 

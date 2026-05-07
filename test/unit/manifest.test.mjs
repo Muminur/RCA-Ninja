@@ -384,6 +384,77 @@ describe('rebuildManifest', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('includes root_cause_snippet (first 200 chars of ## Root Cause section)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-manifest-rootcause-'));
+    try {
+      const longCause = 'A'.repeat(300);
+      const content =
+        '---\ntitle: "RCA with root cause"\nref: rc1234\ndate: 2026-04-25T10:00:00Z\n' +
+        'confidence: high\ntags: [auth]\nfiles: [src/foo.js]\n---\n\n' +
+        '## Symptom\n\nSomething broke.\n\n' +
+        `## Root Cause\n\n${longCause}\n\n` +
+        '## Fix\n\nFixed it.\n';
+      writeFileSync(join(dir, 'RCA-2026-04-25-rc1234-root-cause.md'), content, 'utf8');
+
+      const manifestPath = await rebuildManifest(dir);
+      const raw = readFileSync(manifestPath, 'utf8');
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      const entry = JSON.parse(dataLines[0]);
+
+      assert.ok('root_cause_snippet' in entry, 'entry should have root_cause_snippet');
+      assert.ok(typeof entry.root_cause_snippet === 'string', 'root_cause_snippet should be a string');
+      assert.ok(entry.root_cause_snippet.length <= 200, 'root_cause_snippet should be at most 200 chars');
+      assert.ok(entry.root_cause_snippet.startsWith('A'), 'root_cause_snippet should start with the root cause text');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('includes fix_snippet (first 150 chars of ## Fix section)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-manifest-fix-'));
+    try {
+      const longFix = 'B'.repeat(300);
+      const content =
+        '---\ntitle: "RCA with fix"\nref: fx1234\ndate: 2026-04-25T10:00:00Z\n' +
+        'confidence: high\ntags: [auth]\nfiles: [src/foo.js]\n---\n\n' +
+        '## Symptom\n\nSomething broke.\n\n' +
+        '## Root Cause\n\nSome cause.\n\n' +
+        `## Fix\n\n${longFix}\n`;
+      writeFileSync(join(dir, 'RCA-2026-04-25-fx1234-fix.md'), content, 'utf8');
+
+      const manifestPath = await rebuildManifest(dir);
+      const raw = readFileSync(manifestPath, 'utf8');
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      const entry = JSON.parse(dataLines[0]);
+
+      assert.ok('fix_snippet' in entry, 'entry should have fix_snippet');
+      assert.ok(typeof entry.fix_snippet === 'string', 'fix_snippet should be a string');
+      assert.ok(entry.fix_snippet.length <= 150, 'fix_snippet should be at most 150 chars');
+      assert.ok(entry.fix_snippet.startsWith('B'), 'fix_snippet should contain fix text');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('root_cause_snippet is empty string when ## Root Cause section is absent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-manifest-norc-'));
+    try {
+      const content =
+        '---\ntitle: "No RC"\nref: norc123\ndate: 2026-04-25T10:00:00Z\n' +
+        'confidence: high\ntags: []\nfiles: []\n---\n\n## Symptom\n\nBroke.\n';
+      writeFileSync(join(dir, 'RCA-2026-04-25-norc123-no-rc.md'), content, 'utf8');
+
+      const manifestPath = await rebuildManifest(dir);
+      const raw = readFileSync(manifestPath, 'utf8');
+      const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      const entry = JSON.parse(dataLines[0]);
+
+      assert.strictEqual(entry.root_cause_snippet, '', 'root_cause_snippet should be empty string when section absent');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('loadManifest', () => {
