@@ -152,9 +152,7 @@ describe('filterDiff', () => {
 
   it('removes *.min.js files (glob with *)', () => {
     // * only matches within a single path segment (no /), so use a root-level .min.js file
-    const diff =
-      makeTextSection('bundle.min.js', 5) +
-      makeTextSection('src/main.js', 3);
+    const diff = makeTextSection('bundle.min.js', 5) + makeTextSection('src/main.js', 3);
 
     const { content, filesSkipped } = filterDiff(diff, {
       skipFiles: ['*.min.js'],
@@ -168,8 +166,7 @@ describe('filterDiff', () => {
 
   it('removes dist/** files (glob with **)', () => {
     const diff =
-      makeTextSection('dist/output/chunk.js', 5) +
-      makeTextSection('src/component.js', 3);
+      makeTextSection('dist/output/chunk.js', 5) + makeTextSection('src/component.js', 3);
 
     const { content, filesSkipped } = filterDiff(diff, {
       skipFiles: ['dist/**'],
@@ -210,8 +207,7 @@ describe('filterDiff', () => {
   });
 
   it('returns unchanged diff when nothing matches skip list', () => {
-    const diff =
-      makeTextSection('src/foo.mjs', 3) + makeTextSection('src/bar.mjs', 2);
+    const diff = makeTextSection('src/foo.mjs', 3) + makeTextSection('src/bar.mjs', 2);
 
     const { content, filesSkipped } = filterDiff(diff, {
       skipFiles: ['package-lock.json'],
@@ -235,9 +231,7 @@ describe('filterDiff', () => {
   });
 
   it('uses DEFAULT_SKIP_FILES when no options provided', () => {
-    const diff =
-      makeTextSection('package-lock.json', 10) +
-      makeTextSection('src/main.mjs', 3);
+    const diff = makeTextSection('package-lock.json', 10) + makeTextSection('src/main.mjs', 3);
 
     const { content, filesSkipped } = filterDiff(diff);
 

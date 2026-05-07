@@ -400,14 +400,14 @@ All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
 
 claude-rca generate [options]
 
---from <ref>         Git ref to analyze (default: HEAD)
---since <ref>        Generate RCAs for all fix: commits since a git ref/tag
---message <msg>      Override the commit message
---logs <file>        Attach a log file to the analysis context
---dry-run            Print the would-be output path without writing
---no-obsidian        Skip Obsidian sync even if configured
---no-secret-scan     Skip scanning the diff for secrets
---analyze            Run rca-analyst quality check after generation
+--from <ref> Git ref to analyze (default: HEAD)
+--since <ref> Generate RCAs for all fix: commits since a git ref/tag
+--message <msg> Override the commit message
+--logs <file> Attach a log file to the analysis context
+--dry-run Print the would-be output path without writing
+--no-obsidian Skip Obsidian sync even if configured
+--no-secret-scan Skip scanning the diff for secrets
+--analyze Run rca-analyst quality check after generation
 
 ```
 
@@ -431,8 +431,8 @@ claude-rca search [query] [options]
 
 claude-rca amend <id> [options]
 
---hint <text>        Correction note passed to Claude for the re-generation
---cwd <path>         Working directory (default: current directory)
+--hint <text> Correction note passed to Claude for the re-generation
+--cwd <path> Working directory (default: current directory)
 
 ```
 
@@ -442,7 +442,7 @@ claude-rca amend <id> [options]
 
 claude-rca trends [options]
 
---json               Output results as JSON
+--json Output results as JSON
 
 ```
 

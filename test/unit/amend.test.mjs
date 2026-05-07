@@ -307,7 +307,12 @@ describe('amendRca', () => {
       writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
 
       const fakePriorRcas = [
-        { title: 'Old bug', root_cause: 'A prior cause', date: '2025-01-01', files: ['src/foo.mjs'] },
+        {
+          title: 'Old bug',
+          root_cause: 'A prior cause',
+          date: '2025-01-01',
+          files: ['src/foo.mjs'],
+        },
       ];
 
       let capturedGenerateArgs;

@@ -173,7 +173,12 @@ export async function getBugIntroducedBy(filesChanged, cwd, ref = 'HEAD') {
   return null;
 }
 
-export async function buildContext({ cwd = process.cwd(), ref = 'HEAD', logs = null, config = null } = {}) {
+export async function buildContext({
+  cwd = process.cwd(),
+  ref = 'HEAD',
+  logs = null,
+  config = null,
+} = {}) {
   let resolvedRef;
   try {
     resolvedRef = await git.revParse(ref, cwd);

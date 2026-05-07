@@ -52,12 +52,10 @@ export async function generateLlmsTxt(outputDir, entries) {
   if (recent.length > 0) {
     lines.push('## Recent RCAs (latest 20)', '');
     for (const e of recent) {
-      const snippet =
-        e.root_cause_snippet
-          ? ` — ${e.root_cause_snippet.slice(0, 120).replace(/\n/g, ' ')}`
-          : '';
-      const tags =
-        e.tags && e.tags.length > 0 ? ` [${e.tags.slice(0, 3).join(', ')}]` : '';
+      const snippet = e.root_cause_snippet
+        ? ` — ${e.root_cause_snippet.slice(0, 120).replace(/\n/g, ' ')}`
+        : '';
+      const tags = e.tags && e.tags.length > 0 ? ` [${e.tags.slice(0, 3).join(', ')}]` : '';
       lines.push(`- [${e.id}](${e.path}): ${e.title}${snippet}${tags}`);
     }
     lines.push('');

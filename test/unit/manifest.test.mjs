@@ -403,9 +403,18 @@ describe('rebuildManifest', () => {
       const entry = JSON.parse(dataLines[0]);
 
       assert.ok('root_cause_snippet' in entry, 'entry should have root_cause_snippet');
-      assert.ok(typeof entry.root_cause_snippet === 'string', 'root_cause_snippet should be a string');
-      assert.ok(entry.root_cause_snippet.length <= 200, 'root_cause_snippet should be at most 200 chars');
-      assert.ok(entry.root_cause_snippet.startsWith('A'), 'root_cause_snippet should start with the root cause text');
+      assert.ok(
+        typeof entry.root_cause_snippet === 'string',
+        'root_cause_snippet should be a string',
+      );
+      assert.ok(
+        entry.root_cause_snippet.length <= 200,
+        'root_cause_snippet should be at most 200 chars',
+      );
+      assert.ok(
+        entry.root_cause_snippet.startsWith('A'),
+        'root_cause_snippet should start with the root cause text',
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -450,7 +459,11 @@ describe('rebuildManifest', () => {
       const dataLines = raw.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
       const entry = JSON.parse(dataLines[0]);
 
-      assert.strictEqual(entry.root_cause_snippet, '', 'root_cause_snippet should be empty string when section absent');
+      assert.strictEqual(
+        entry.root_cause_snippet,
+        '',
+        'root_cause_snippet should be empty string when section absent',
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -462,7 +475,15 @@ describe('generateLlmsTxt', () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-llmstxt-create-'));
     try {
       const entries = [
-        { id: 'RCA-2026-04-25-abc1234', title: 'Foo bug', date: '2026-04-25', path: 'RCA-2026-04-25-abc1234.md', tags: ['auth'], root_cause_snippet: 'Something broke', fix_snippet: 'Fixed it' },
+        {
+          id: 'RCA-2026-04-25-abc1234',
+          title: 'Foo bug',
+          date: '2026-04-25',
+          path: 'RCA-2026-04-25-abc1234.md',
+          tags: ['auth'],
+          root_cause_snippet: 'Something broke',
+          fix_snippet: 'Fixed it',
+        },
       ];
       const llmsTxtPath = await generateLlmsTxt(dir, entries);
       const { existsSync: exists } = await import('node:fs');
@@ -477,7 +498,15 @@ describe('generateLlmsTxt', () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-llmstxt-heading-'));
     try {
       const entries = [
-        { id: 'RCA-2026-04-25-abc1234', title: 'Foo bug', date: '2026-04-25', path: 'RCA-2026-04-25-abc1234.md', tags: [], root_cause_snippet: '', fix_snippet: '' },
+        {
+          id: 'RCA-2026-04-25-abc1234',
+          title: 'Foo bug',
+          date: '2026-04-25',
+          path: 'RCA-2026-04-25-abc1234.md',
+          tags: [],
+          root_cause_snippet: '',
+          fix_snippet: '',
+        },
       ];
       await generateLlmsTxt(dir, entries);
       const content = readFileSync(join(dir, 'llms.txt'), 'utf8');
@@ -491,8 +520,24 @@ describe('generateLlmsTxt', () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-llmstxt-count-'));
     try {
       const entries = [
-        { id: 'RCA-2026-04-25-abc1234', title: 'Foo bug', date: '2026-04-25', path: 'RCA-2026-04-25-abc1234.md', tags: [], root_cause_snippet: '', fix_snippet: '' },
-        { id: 'RCA-2026-04-24-def5678', title: 'Bar bug', date: '2026-04-24', path: 'RCA-2026-04-24-def5678.md', tags: [], root_cause_snippet: '', fix_snippet: '' },
+        {
+          id: 'RCA-2026-04-25-abc1234',
+          title: 'Foo bug',
+          date: '2026-04-25',
+          path: 'RCA-2026-04-25-abc1234.md',
+          tags: [],
+          root_cause_snippet: '',
+          fix_snippet: '',
+        },
+        {
+          id: 'RCA-2026-04-24-def5678',
+          title: 'Bar bug',
+          date: '2026-04-24',
+          path: 'RCA-2026-04-24-def5678.md',
+          tags: [],
+          root_cause_snippet: '',
+          fix_snippet: '',
+        },
       ];
       await generateLlmsTxt(dir, entries);
       const content = readFileSync(join(dir, 'llms.txt'), 'utf8');
@@ -530,7 +575,15 @@ describe('generateLlmsTxt', () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-llmstxt-format-'));
     try {
       const entries = [
-        { id: 'RCA-2026-04-25-abc1234', title: 'Auth bug', date: '2026-04-25', path: 'RCA-2026-04-25-abc1234.md', tags: [], root_cause_snippet: '', fix_snippet: '' },
+        {
+          id: 'RCA-2026-04-25-abc1234',
+          title: 'Auth bug',
+          date: '2026-04-25',
+          path: 'RCA-2026-04-25-abc1234.md',
+          tags: [],
+          root_cause_snippet: '',
+          fix_snippet: '',
+        },
       ];
       await generateLlmsTxt(dir, entries);
       const content = readFileSync(join(dir, 'llms.txt'), 'utf8');
@@ -549,9 +602,33 @@ describe('generateLlmsTxt', () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-llmstxt-tags-'));
     try {
       const entries = [
-        { id: 'RCA-2026-04-25-a1', title: 'Bug A', date: '2026-04-25', path: 'a1.md', tags: ['auth', 'backend'], root_cause_snippet: '', fix_snippet: '' },
-        { id: 'RCA-2026-04-24-a2', title: 'Bug B', date: '2026-04-24', path: 'a2.md', tags: ['auth', 'frontend'], root_cause_snippet: '', fix_snippet: '' },
-        { id: 'RCA-2026-04-23-a3', title: 'Bug C', date: '2026-04-23', path: 'a3.md', tags: ['backend'], root_cause_snippet: '', fix_snippet: '' },
+        {
+          id: 'RCA-2026-04-25-a1',
+          title: 'Bug A',
+          date: '2026-04-25',
+          path: 'a1.md',
+          tags: ['auth', 'backend'],
+          root_cause_snippet: '',
+          fix_snippet: '',
+        },
+        {
+          id: 'RCA-2026-04-24-a2',
+          title: 'Bug B',
+          date: '2026-04-24',
+          path: 'a2.md',
+          tags: ['auth', 'frontend'],
+          root_cause_snippet: '',
+          fix_snippet: '',
+        },
+        {
+          id: 'RCA-2026-04-23-a3',
+          title: 'Bug C',
+          date: '2026-04-23',
+          path: 'a3.md',
+          tags: ['backend'],
+          root_cause_snippet: '',
+          fix_snippet: '',
+        },
       ];
       await generateLlmsTxt(dir, entries);
       const content = readFileSync(join(dir, 'llms.txt'), 'utf8');
@@ -568,7 +645,15 @@ describe('generateLlmsTxt', () => {
     try {
       const longSnippet = 'X'.repeat(200);
       const entries = [
-        { id: 'RCA-2026-04-25-abc1234', title: 'Long snippet bug', date: '2026-04-25', path: 'long.md', tags: [], root_cause_snippet: longSnippet, fix_snippet: '' },
+        {
+          id: 'RCA-2026-04-25-abc1234',
+          title: 'Long snippet bug',
+          date: '2026-04-25',
+          path: 'long.md',
+          tags: [],
+          root_cause_snippet: longSnippet,
+          fix_snippet: '',
+        },
       ];
       await generateLlmsTxt(dir, entries);
       const content = readFileSync(join(dir, 'llms.txt'), 'utf8');
@@ -579,7 +664,10 @@ describe('generateLlmsTxt', () => {
       const line = entryLines[0];
       const snippetMatch = line.match(/ — (X+)/);
       assert.ok(snippetMatch, 'should have snippet in entry line');
-      assert.ok(snippetMatch[1].length <= 120, `snippet in line should be at most 120 chars, got ${snippetMatch[1].length}`);
+      assert.ok(
+        snippetMatch[1].length <= 120,
+        `snippet in line should be at most 120 chars, got ${snippetMatch[1].length}`,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -593,7 +681,10 @@ describe('generateLlmsTxt', () => {
       assert.ok(content.startsWith('# RCA Corpus —'), 'should still have heading when empty');
       assert.ok(content.includes('Total: 0 RCAs'), 'should show 0 RCAs');
       // Recent section should NOT be present when no entries
-      assert.ok(!content.includes('## Recent RCAs'), 'should not have recent section when no entries');
+      assert.ok(
+        !content.includes('## Recent RCAs'),
+        'should not have recent section when no entries',
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -612,7 +703,10 @@ describe('generateLlmsTxt', () => {
       });
       await rebuildManifest(dir);
       assert.ok(existsSync(join(dir, '_manifest.jsonl')), '_manifest.jsonl should exist');
-      assert.ok(existsSync(join(dir, 'llms.txt')), 'llms.txt should be generated by rebuildManifest');
+      assert.ok(
+        existsSync(join(dir, 'llms.txt')),
+        'llms.txt should be generated by rebuildManifest',
+      );
       const llmsContent = readFileSync(join(dir, 'llms.txt'), 'utf8');
       assert.ok(llmsContent.startsWith('# RCA Corpus —'), 'llms.txt should have valid heading');
       assert.ok(llmsContent.includes('Total: 1 RCA'), 'llms.txt should reflect one entry');

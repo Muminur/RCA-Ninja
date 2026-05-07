@@ -446,7 +446,10 @@ describe('readPriorRcasFromManifest', () => {
       outputDir: dir,
       filesChanged: ['src/auth.js'],
     });
-    assert.ok(resultsDefault.length <= 3, `default limit should be ≤3, got ${resultsDefault.length}`);
+    assert.ok(
+      resultsDefault.length <= 3,
+      `default limit should be ≤3, got ${resultsDefault.length}`,
+    );
 
     const resultsLimit1 = readPriorRcasFromManifest({
       outputDir: dir,
