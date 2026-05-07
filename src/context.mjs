@@ -4,6 +4,113 @@ import { RcaError } from './errors.mjs';
 
 const MAX_DIFF_BYTES = 200 * 1024;
 
+export const DEFAULT_SKIP_FILES = [
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'bun.lockb',
+  'npm-shrinkwrap.json',
+  'composer.lock',
+  '*.min.js',
+  '*.min.css',
+  '*.map',
+  'dist/**',
+  'build/**',
+  '.next/**',
+  'coverage/**',
+];
+
+/**
+ * Minimal glob matcher.
+ * - star         -> any chars except "/"
+ * - star-star-/  -> any path prefix (zero or more directory components)
+ * - star-star    -> matches anything including "/"
+ * - literals     -> exact match
+ * @param {string} filePath
+ * @param {string} pattern
+ * @returns {boolean}
+ */
+function matchesGlob(filePath, pattern) {
+  // Escape regex special chars except * which we handle specially
+  const SPECIAL = new Set(['.', '+', '^', '$', '{', '}', '(', ')', '|', '[', ']', '\\']);
+  const escapeNonStar = (s) =>
+    s
+      .split('')
+      .map((ch) => (SPECIAL.has(ch) ? '\\' + ch : ch))
+      .join('');
+
+  // Build a regex from the glob pattern token-by-token
+  let regexStr = '';
+  let i = 0;
+  while (i < pattern.length) {
+    if (pattern[i] === '*' && pattern[i + 1] === '*') {
+      // ** — check for **/ prefix (start of pattern) or standalone **
+      if (i === 0 && pattern[i + 2] === '/') {
+        // **/ at the start: match any leading path prefix (zero or more dirs)
+        regexStr += '(?:.+/)?';
+        i += 3;
+      } else {
+        // ** anywhere else: match any sequence of chars including /
+        regexStr += '.*';
+        i += 2;
+      }
+    } else if (pattern[i] === '*') {
+      // * — match any chars except /
+      regexStr += '[^/]*';
+      i += 1;
+    } else {
+      regexStr += escapeNonStar(pattern[i]);
+      i += 1;
+    }
+  }
+
+  return new RegExp('^' + regexStr + '$').test(filePath);
+}
+
+/**
+ * Filter a unified diff, removing binary-file sections and sections whose
+ * file path matches one of the skip patterns.
+ *
+ * @param {string} diff - full unified diff string
+ * @param {{ skipFiles?: string[], skipBinary?: boolean }} [options]
+ * @returns {{ content: string, filesSkipped: string[] }}
+ */
+export function filterDiff(diff, options = {}) {
+  const { skipFiles = DEFAULT_SKIP_FILES, skipBinary = true } = options;
+
+  // Split into per-file sections; each starts with "diff --git a/..."
+  // Use a lookahead so the delimiter stays at the start of each chunk.
+  const sections = diff.split(/(?=^diff --git )/m);
+
+  const kept = [];
+  const filesSkipped = [];
+
+  for (const section of sections) {
+    if (!section.trim()) continue;
+
+    // Extract the file path from the "diff --git a/<path> b/<path>" header
+    // Prefer the b/ (post-change) path; fall back to a/ for pure deletes.
+    const headerMatch = section.match(/^diff --git a\/(.*?) b\/(.*?)$/m);
+    const filePath = headerMatch ? headerMatch[2] : null;
+
+    // Check for binary section
+    if (skipBinary && /^Binary files /m.test(section)) {
+      if (filePath) filesSkipped.push(filePath);
+      continue;
+    }
+
+    // Check against skip patterns
+    if (filePath && skipFiles.some((pattern) => matchesGlob(filePath, pattern))) {
+      filesSkipped.push(filePath);
+      continue;
+    }
+
+    kept.push(section);
+  }
+
+  return { content: kept.join(''), filesSkipped };
+}
+
 /**
  * Truncate a unified diff at hunk boundaries so we never send Claude a half-hunk.
  * Returns { content, truncated }.
@@ -66,7 +173,7 @@ export async function getBugIntroducedBy(filesChanged, cwd, ref = 'HEAD') {
   return null;
 }
 
-export async function buildContext({ cwd = process.cwd(), ref = 'HEAD', logs = null } = {}) {
+export async function buildContext({ cwd = process.cwd(), ref = 'HEAD', logs = null, config = null } = {}) {
   let resolvedRef;
   try {
     resolvedRef = await git.revParse(ref, cwd);
@@ -89,7 +196,14 @@ export async function buildContext({ cwd = process.cwd(), ref = 'HEAD', logs = n
     throw new RcaError('NO_DIFF', { ref });
   }
 
-  const { content: diffContent, truncated: diffTruncated } = truncateDiff(rawDiff);
+  const configSkip = config?.diff_filter?.skip_files ?? DEFAULT_SKIP_FILES;
+  const configSkipBinary = config?.diff_filter?.skip_binary ?? true;
+  const { content: filteredDiff, filesSkipped } = filterDiff(rawDiff, {
+    skipFiles: configSkip,
+    skipBinary: configSkipBinary,
+  });
+
+  const { content: diffContent, truncated: diffTruncated } = truncateDiff(filteredDiff);
 
   const isoDate = new Date(ts).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
@@ -106,6 +220,7 @@ export async function buildContext({ cwd = process.cwd(), ref = 'HEAD', logs = n
     files_changed: files,
     diff: diffContent,
     diff_truncated: diffTruncated,
+    files_filtered: filesSkipped,
     logs,
     timestamp_utc: isoDate,
     bug_introduced_by: bugIntroducedBy,
