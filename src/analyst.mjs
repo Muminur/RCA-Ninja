@@ -34,8 +34,6 @@ export async function runAnalyst({ writtenPath, systemPromptPath, config, _spawn
   const cmdPrefix = binaryParts.slice(1);
 
   const argv = [...cmdPrefix];
-  // Always use --bare for analyst (automated context; no env-var read per rule §2.9)
-  argv.push('--bare');
   argv.push('-p', `Analyze this RCA file and provide a quality verdict: ${writtenPath}`);
   argv.push('--append-system-prompt', systemPrompt);
   argv.push('--output-format', 'json');

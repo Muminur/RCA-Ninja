@@ -1,8 +1,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?logo=nodedotjs&logoColor=white" alt="Node.js >= 20" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" />
-  <img src="https://img.shields.io/badge/tests-520%20passed-brightgreen" alt="520 Tests" />
-  <img src="https://img.shields.io/badge/coverage-84%25-brightgreen" alt="84% Coverage" />
+  <img src="https://img.shields.io/badge/tests-576%20passed-brightgreen" alt="576 Tests" />
+  <img src="https://img.shields.io/badge/coverage-85%25-brightgreen" alt="85% Coverage" />
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="v0.1.0" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Cross-platform" />
 </p>
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  A local-first CLI that wraps <code>claude --bare</code> to produce validated, searchable RCA Markdown artifacts from <code>git diff</code> output — with optional Obsidian vault sync.
+  A local-first CLI that wraps <code>claude -p</code> to produce validated, searchable RCA Markdown artifacts from <code>git diff</code> output — with optional Obsidian vault sync.
 </p>
 
 ---
@@ -635,22 +635,23 @@ In any Claude Code session inside this project:
 
 Every error is typed (`RcaError`) with a deterministic exit code:
 
-| Exit  | Code                | Category | Meaning                                       |
-| ----- | ------------------- | -------- | --------------------------------------------- |
-| `0`   | —                   | —        | Success                                       |
-| `10`  | `ALREADY_INIT`      | input    | Project already initialized                   |
-| `20`  | `NO_DIFF`           | input    | No diff to analyze for the given ref          |
-| `21`  | `CLAUDE_FAILURE`    | external | Claude subprocess exited non-zero             |
-| `22`  | `SCHEMA_VALIDATION` | external | Claude's output failed JSON schema validation |
-| `23`  | `WRITE_CONFLICT`    | fs       | RCA already exists at destination             |
-| `24`  | `DISK_ERROR`        | fs       | Filesystem error during write                 |
-| `30`  | `RIPGREP_MISSING`   | env      | `rg` not on PATH                              |
-| `40`  | `NOT_FOUND`         | input    | RCA not found by ID or path                   |
-| `50`  | `INVALID_CONFIG_*`  | input    | Invalid config key or value                   |
-| `60`  | `NO_VAULT`          | env      | Obsidian enabled but no vault configured      |
-| `61`  | `INVALID_VAULT`     | env      | Vault path missing `.obsidian/`               |
-| `70`  | `DOCTOR_UNHEALTHY`  | env      | Environment check failed                      |
-| `100` | `INTERNAL`          | bug      | Unexpected error — please file a bug          |
+| Exit  | Code                    | Category | Meaning                                       |
+| ----- | ----------------------- | -------- | --------------------------------------------- |
+| `0`   | —                       | —        | Success                                       |
+| `10`  | `ALREADY_INIT`          | input    | Project already initialized                   |
+| `20`  | `NO_DIFF`               | input    | No diff to analyze for the given ref          |
+| `21`  | `CLAUDE_FAILURE`        | external | Claude subprocess exited non-zero             |
+| `22`  | `SCHEMA_VALIDATION`     | external | Claude's output failed JSON schema validation |
+| `23`  | `WRITE_CONFLICT`        | fs       | RCA already exists at destination             |
+| `24`  | `DISK_ERROR`            | fs       | Filesystem error during write                 |
+| `25`  | `TOKEN_BUDGET_EXCEEDED` | input    | Diff payload exceeds token budget             |
+| `30`  | `RIPGREP_MISSING`       | env      | `rg` not on PATH                              |
+| `40`  | `NOT_FOUND`             | input    | RCA not found by ID or path                   |
+| `50`  | `INVALID_CONFIG_*`      | input    | Invalid config key or value                   |
+| `60`  | `NO_VAULT`              | env      | Obsidian enabled but no vault configured      |
+| `61`  | `INVALID_VAULT`         | env      | Vault path missing `.obsidian/`               |
+| `70`  | `DOCTOR_UNHEALTHY`      | env      | Environment check failed                      |
+| `100` | `INTERNAL`              | bug      | Unexpected error — please file a bug          |
 
 ---
 
@@ -833,7 +834,7 @@ npm test                  # unit tests
 npm run test:integration  # integration tests
 npm run test:e2e          # e2e tests with claude-stub
 npm run coverage          # c8 report (target ≥83%)
-npm run check             # lint + typecheck + test + coverage gate (520 total)
+npm run check             # lint + typecheck + test + coverage gate (576 total)
 npm run lint              # eslint + prettier
 npm run format            # auto-format with prettier
 ```
