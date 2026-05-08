@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -137,6 +137,32 @@ describe('generate e2e', () => {
     const ofIdx = entry.argv.indexOf('--output-format');
     assert.ok(ofIdx !== -1, '--output-format must be present in argv');
     assert.strictEqual(entry.argv[ofIdx + 1], 'json');
+  });
+
+  it('argv NEVER contains --bare even when ANTHROPIC_API_KEY is set', () => {
+    const logPath = join(tmp, 'stub.log');
+    makeConfig(tmp);
+    runCli(['generate'], tmp, {
+      CLAUDE_STUB_LOG: logPath,
+      ANTHROPIC_API_KEY: 'sk-ant-fake-key-for-test',
+    });
+    const log = readFileSync(logPath, 'utf8');
+    const entry = JSON.parse(log.trim().split('\n')[0]);
+    assert.ok(!entry.argv.includes('--bare'), 'argv must not contain --bare');
+  });
+
+  it('estimated_tokens is logged to stderr', () => {
+    makeConfig(tmp);
+    const result = spawnSync('node', [BIN, 'generate'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env },
+      timeout: 30000,
+    });
+    assert.ok(
+      result.stderr.includes('estimated_tokens'),
+      `stderr should contain estimated_tokens, got: ${result.stderr.slice(0, 200)}`,
+    );
   });
 
   it('--analyze runs analyst and still writes the RCA on PUBLISH verdict', () => {

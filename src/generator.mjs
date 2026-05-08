@@ -5,6 +5,11 @@ import { randomUUID } from 'node:crypto';
 import { run } from './util/exec.mjs';
 import { validateRca } from './schema.mjs';
 import { RcaError } from './errors.mjs';
+import {
+  estimatePayload,
+  TOKEN_WARN_THRESHOLD,
+  TOKEN_HARD_LIMIT,
+} from './token-estimate.mjs';
 
 const SECRET_REGEX = new RegExp(
   [
@@ -57,18 +62,43 @@ export async function generate({
     const systemPrompt = readFileSync(systemPromptPath, 'utf8');
     const schema = readFileSync(schemaPath, 'utf8');
 
+    const systemPromptStr = systemPrompt;
+    const schemaStr = schema;
+    const contextJsonStr = JSON.stringify(
+      buildContextPayload({ context, priorRcas, diffFile }),
+    );
+    const estimate = estimatePayload({
+      systemPrompt: systemPromptStr,
+      schema: schemaStr,
+      contextJson: contextJsonStr,
+      diff: context.diff,
+      priorRcas: JSON.stringify(priorRcas || []),
+    });
+
+    if (estimate.total > TOKEN_HARD_LIMIT) {
+      throw new RcaError('TOKEN_BUDGET_EXCEEDED', {
+        reason: `Estimated ${estimate.total} tokens exceeds hard limit of ${TOKEN_HARD_LIMIT}. Breakdown: system=${estimate.breakdown.system}, schema=${estimate.breakdown.schema}, context=${estimate.breakdown.context}, diff=${estimate.breakdown.diff}, prior=${estimate.breakdown.prior}`,
+      });
+    }
+    if (estimate.total > TOKEN_WARN_THRESHOLD) {
+      process.stderr.write(
+        `WARN: Token estimate ${estimate.total} exceeds warning threshold (${TOKEN_WARN_THRESHOLD}). Breakdown: ${JSON.stringify(estimate.breakdown)}\n`,
+      );
+    }
+    process.stderr.write(
+      `INFO: estimated_tokens=${estimate.total}\n`,
+    );
+
     const binaryRaw = config.claude?.binary || 'claude';
     const binaryParts = binaryRaw.split(/\s+/);
     const cmd = binaryParts[0];
     const cmdPrefix = binaryParts.slice(1);
-    const useBare = !!process.env.ANTHROPIC_API_KEY;
     const permissionMode = config.claude?.permission_mode || 'plan';
     const allowedTools = config.claude?.allowed_tools || 'Read';
     const timeoutMs = config.claude?.timeout_ms || 60000;
     const maxRetries = config.claude?.max_retries ?? 1;
 
     const argv = [...cmdPrefix];
-    if (useBare) argv.push('--bare');
     let prompt = `Read ${contextFile} and ${diffFile} and produce an RCA.`;
     if (correctionHint) prompt += `\n\nCorrection hint: ${correctionHint}`;
     argv.push('-p', prompt);
