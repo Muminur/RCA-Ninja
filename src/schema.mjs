@@ -65,6 +65,37 @@ const CONFIG_SCHEMA = {
         format: { enum: ['slack', 'discord', 'generic'], default: 'generic' },
       },
     },
+    diff_filter: {
+      type: 'object',
+      properties: {
+        skip_files: { type: 'array', items: { type: 'string' } },
+        skip_binary: { type: 'boolean' },
+        per_file_cap_bytes: { type: 'integer', minimum: 1024 },
+        drop_import_only_hunks: { type: 'boolean' },
+        use_function_context: { type: 'boolean' },
+        ast_extraction: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean' },
+            single_hunk_threshold_bytes: { type: 'integer', minimum: 512 },
+            languages: {
+              type: 'array',
+              items: { type: 'string' },
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    },
+    token_budget: {
+      type: 'object',
+      properties: {
+        warn_at: { type: 'integer', minimum: 0 },
+        hard_limit: { type: 'integer', minimum: 0 },
+      },
+      additionalProperties: false,
+    },
   },
   required: ['version'],
 };

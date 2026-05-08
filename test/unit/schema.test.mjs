@@ -84,4 +84,65 @@ describe('config schema', () => {
     const result = validateConfig({ version: 1, log: { level: 'verbose' } });
     assert.strictEqual(result.valid, false);
   });
+
+  // diff_filter section tests
+  it('diff_filter.per_file_cap_bytes: 30000 validates', () => {
+    const result = validateConfig({ version: 1, diff_filter: { per_file_cap_bytes: 30000 } });
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('diff_filter.per_file_cap_bytes: 500 rejects (below min 1024)', () => {
+    const result = validateConfig({ version: 1, diff_filter: { per_file_cap_bytes: 500 } });
+    assert.strictEqual(result.valid, false);
+  });
+
+  it('diff_filter.drop_import_only_hunks: true validates as boolean', () => {
+    const result = validateConfig({
+      version: 1,
+      diff_filter: { drop_import_only_hunks: true },
+    });
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('diff_filter.use_function_context: true validates as boolean', () => {
+    const result = validateConfig({
+      version: 1,
+      diff_filter: { use_function_context: true },
+    });
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('diff_filter.ast_extraction validates with enabled, threshold, and languages', () => {
+    const result = validateConfig({
+      version: 1,
+      diff_filter: {
+        ast_extraction: {
+          enabled: true,
+          single_hunk_threshold_bytes: 5000,
+          languages: ['js', 'ts', 'py'],
+        },
+      },
+    });
+    assert.strictEqual(result.valid, true);
+  });
+
+  // token_budget section tests
+  it('token_budget.warn_at: 80000, hard_limit: 180000 validates', () => {
+    const result = validateConfig({
+      version: 1,
+      token_budget: { warn_at: 80000, hard_limit: 180000 },
+    });
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('token_budget.hard_limit: -1 rejects (minimum 0)', () => {
+    const result = validateConfig({ version: 1, token_budget: { hard_limit: -1 } });
+    assert.strictEqual(result.valid, false);
+  });
+
+  // regression guard: config without diff_filter/token_budget still validates
+  it('config without diff_filter or token_budget still validates', () => {
+    const result = validateConfig({ version: 1 });
+    assert.strictEqual(result.valid, true);
+  });
 });

@@ -36,4 +36,17 @@ describe('RcaError', () => {
       assert.ok(typeof entry.template === 'string', `${code} missing template`);
     }
   });
+
+  it('TOKEN_BUDGET_EXCEEDED exists with exit 25 and category input', () => {
+    const entry = ERROR_TABLE['TOKEN_BUDGET_EXCEEDED'];
+    assert.ok(entry, 'TOKEN_BUDGET_EXCEEDED missing from ERROR_TABLE');
+    assert.strictEqual(entry.exit, 25);
+    assert.strictEqual(entry.category, 'input');
+  });
+
+  it('new RcaError TOKEN_BUDGET_EXCEEDED has correct code and exitCode', () => {
+    const err = new RcaError('TOKEN_BUDGET_EXCEEDED', 'payload too large');
+    assert.strictEqual(err.code, 'TOKEN_BUDGET_EXCEEDED');
+    assert.strictEqual(err.exitCode, 25);
+  });
 });

@@ -17,6 +17,11 @@ const ERROR_TABLE = {
     template: 'An RCA already exists at {path}. Refusing to overwrite.',
   },
   DISK_ERROR: { category: 'fs', exit: 24, template: 'Filesystem error during {op}: {errno}.' },
+  TOKEN_BUDGET_EXCEEDED: {
+    category: 'input',
+    exit: 25,
+    template: 'Token budget exceeded: {reason}.',
+  },
   RIPGREP_MISSING: {
     category: 'env',
     exit: 30,
