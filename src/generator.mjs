@@ -5,11 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { run } from './util/exec.mjs';
 import { validateRca } from './schema.mjs';
 import { RcaError } from './errors.mjs';
-import {
-  estimatePayload,
-  TOKEN_WARN_THRESHOLD,
-  TOKEN_HARD_LIMIT,
-} from './token-estimate.mjs';
+import { estimatePayload, TOKEN_WARN_THRESHOLD, TOKEN_HARD_LIMIT } from './token-estimate.mjs';
 
 const SECRET_REGEX = new RegExp(
   [
@@ -64,9 +60,7 @@ export async function generate({
 
     const systemPromptStr = systemPrompt;
     const schemaStr = schema;
-    const contextJsonStr = JSON.stringify(
-      buildContextPayload({ context, priorRcas, diffFile }),
-    );
+    const contextJsonStr = JSON.stringify(buildContextPayload({ context, priorRcas, diffFile }));
     const estimate = estimatePayload({
       systemPrompt: systemPromptStr,
       schema: schemaStr,
@@ -85,9 +79,7 @@ export async function generate({
         `WARN: Token estimate ${estimate.total} exceeds warning threshold (${TOKEN_WARN_THRESHOLD}). Breakdown: ${JSON.stringify(estimate.breakdown)}\n`,
       );
     }
-    process.stderr.write(
-      `INFO: estimated_tokens=${estimate.total}\n`,
-    );
+    process.stderr.write(`INFO: estimated_tokens=${estimate.total}\n`);
 
     const binaryRaw = config.claude?.binary || 'claude';
     const binaryParts = binaryRaw.split(/\s+/);
