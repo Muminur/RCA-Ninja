@@ -18,6 +18,14 @@ export const DEFAULT_SKIP_FILES = [
   'build/**',
   '.next/**',
   'coverage/**',
+  '*.snap',
+  '__snapshots__/**',
+  '*.generated.*',
+  'vendor/**',
+  'third_party/**',
+  'node_modules/**',
+  '*.lock.json',
+  '*.min.*',
 ];
 
 /**
@@ -130,6 +138,184 @@ export function truncateDiff(diff, maxBytes = MAX_DIFF_BYTES) {
     result = candidate;
   }
   return { content: result, truncated: true };
+}
+
+/**
+ * Walk a unified diff and truncate each per-file section at hunk boundaries
+ * so that no single file exceeds `capBytes`. Files that were truncated are
+ * listed in `files_capped`.
+ *
+ * @param {string} diff - full unified diff string
+ * @param {number} capBytes - maximum bytes allowed per file section
+ * @returns {{ diff: string, files_capped: string[] }}
+ */
+export function applyPerFileCap(diff, capBytes) {
+  if (!diff) return { diff: '', files_capped: [] };
+
+  const fileSections = diff.split(/(?=^diff --git )/m);
+  const kept = [];
+  const filesCapped = [];
+
+  for (const section of fileSections) {
+    if (!section.trim()) continue;
+
+    // Extract file path from header
+    const headerMatch = section.match(/^diff --git a\/(.*?) b\/(.*?)$/m);
+    const filePath = headerMatch ? headerMatch[2] : null;
+
+    const sectionBytes = Buffer.byteLength(section);
+    if (sectionBytes <= capBytes) {
+      kept.push(section);
+      continue;
+    }
+
+    // Split into file header (before first @@) and hunks
+    const hunkSplitIdx = section.search(/^@@/m);
+    if (hunkSplitIdx === -1) {
+      // No hunks — just a header (e.g., new file mode). Keep it under cap.
+      if (Buffer.byteLength(section) <= capBytes) {
+        kept.push(section);
+      } else if (filePath) {
+        filesCapped.push(filePath);
+      }
+      continue;
+    }
+
+    const fileHeader = section.slice(0, hunkSplitIdx);
+    const hunksStr = section.slice(hunkSplitIdx);
+    const hunks = hunksStr.split(/(?=^@@)/m);
+
+    let assembled = fileHeader;
+    let anyDropped = false;
+
+    for (const hunk of hunks) {
+      if (!hunk.trim()) continue;
+      const candidate = assembled + hunk;
+      if (Buffer.byteLength(candidate) > capBytes) {
+        anyDropped = true;
+        break;
+      }
+      assembled = candidate;
+    }
+
+    kept.push(assembled);
+    if (anyDropped && filePath) {
+      filesCapped.push(filePath);
+    }
+  }
+
+  return { diff: kept.join(''), files_capped: filesCapped };
+}
+
+/**
+ * Regex matching import/require/from/use/using statements across languages.
+ * Used to identify non-substantive diff hunks.
+ */
+const IMPORT_RE = /^\s*(import\s|from\s|require\s*\(|use\s|using\s)/;
+
+/**
+ * Check whether a hunk contains only import/whitespace changes.
+ * Context lines (prefixed with space) and diff metadata (\\ No newline...)
+ * are ignored when scoring.
+ *
+ * @param {string} hunk - a single hunk string starting with @@
+ * @returns {boolean} true if all +/- lines are imports or whitespace
+ */
+function isImportOrWhitespaceOnlyHunk(hunk) {
+  const lines = hunk.split('\n');
+  let hasChangedLines = false;
+
+  for (const line of lines) {
+    // Skip hunk header, context lines, and backslash metadata
+    if (line.startsWith('@@') || line.startsWith(' ') || line.startsWith('\\') || line === '') {
+      continue;
+    }
+
+    if (line.startsWith('+') || line.startsWith('-')) {
+      hasChangedLines = true;
+      const content = line.slice(1); // strip the +/- prefix
+
+      // Whitespace-only (including empty after stripping prefix)
+      if (content.trim() === '') continue;
+
+      // Import/require/from/use/using statement
+      if (IMPORT_RE.test(content)) continue;
+
+      // Also match closing parens for multi-line imports like Go's `import (`
+      if (/^\s*\)\s*$/.test(content)) continue;
+
+      // Also match bare string lines inside Go import blocks like `"fmt"`
+      if (/^\s*"[^"]*"\s*$/.test(content)) continue;
+
+      // This line is substantive — hunk is not import-only
+      return false;
+    }
+  }
+
+  // Only consider it import/ws-only if there were actual changed lines
+  return hasChangedLines;
+}
+
+/**
+ * Parse a unified diff into per-file groups of hunks. For each file, if a
+ * hunk is import/whitespace-only AND the file has at least one other hunk,
+ * drop it. Returns the cleaned diff and a count of dropped hunks.
+ *
+ * @param {string} diff - full unified diff string
+ * @returns {{ diff: string, hunks_dropped: number }}
+ */
+export function dropImportOnlyHunks(diff) {
+  if (!diff) return { diff: '', hunks_dropped: 0 };
+
+  const fileSections = diff.split(/(?=^diff --git )/m);
+  const result = [];
+  let totalDropped = 0;
+
+  for (const section of fileSections) {
+    if (!section.trim()) continue;
+
+    // Split into file header (before first @@) and hunks
+    const hunkSplitIdx = section.search(/^@@/m);
+    if (hunkSplitIdx === -1) {
+      // No hunks — keep the section as-is
+      result.push(section);
+      continue;
+    }
+
+    const fileHeader = section.slice(0, hunkSplitIdx);
+    const hunksStr = section.slice(hunkSplitIdx);
+    const hunks = hunksStr.split(/(?=^@@)/m).filter((h) => h.trim());
+
+    // Only drop import-only hunks if the file has more than one hunk
+    if (hunks.length <= 1) {
+      result.push(section);
+      continue;
+    }
+
+    // Classify each hunk
+    const substantiveHunks = [];
+    const importOnlyHunks = [];
+
+    for (const hunk of hunks) {
+      if (isImportOrWhitespaceOnlyHunk(hunk)) {
+        importOnlyHunks.push(hunk);
+      } else {
+        substantiveHunks.push(hunk);
+      }
+    }
+
+    // If ALL hunks are import-only, keep them all (don't drop everything)
+    if (substantiveHunks.length === 0) {
+      result.push(section);
+      continue;
+    }
+
+    // Drop import-only hunks, keep substantive ones
+    totalDropped += importOnlyHunks.length;
+    result.push(fileHeader + substantiveHunks.join(''));
+  }
+
+  return { diff: result.join(''), hunks_dropped: totalDropped };
 }
 
 /**

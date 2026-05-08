@@ -119,4 +119,51 @@ describe('git module behavioral tests', () => {
     const d = await diff('HEAD', tmp);
     assert.ok(!d.includes('package-lock.json'), 'package-lock.json must be excluded from diff');
   });
+
+  it('diff() argv includes -W flag (function-context)', async () => {
+    // Create a file with a long function so -W context matters.
+    // Without -W (default 3-line context), a change deep inside the body
+    // won't show the declaration as a context/diff line — only in the
+    // @@ hunk header. With -W, the entire function is included so the
+    // declaration appears as a context line (prefixed with a space).
+    const lines = ['function longFunction() {'];
+    for (let n = 1; n <= 30; n++) {
+      lines.push('  const v' + String(n) + ' = ' + String(n) + ';');
+    }
+    lines.push('  return v1;');
+    lines.push('}');
+    const body = lines.join('\n');
+    writeFileSync(join(tmp, 'funcs.js'), body + '\n');
+    git(['add', '.'], tmp);
+    git(['commit', '-m', 'feat: add funcs'], tmp);
+
+    // Change only a deep interior line (v25, far from the declaration)
+    const changed = body.replace('const v25 = 25;', 'const v25 = 999;');
+    writeFileSync(join(tmp, 'funcs.js'), changed + '\n');
+    git(['add', '.'], tmp);
+    git(['commit', '-m', 'fix: update v25'], tmp);
+
+    const { diff } = await import('../../src/util/git.mjs');
+    const d = await diff('HEAD', tmp);
+    // With -W, the function declaration appears as a context line
+    // (space-prefixed), not just in the @@ hunk header.
+    const diffLines = d.split('\n');
+    const hasContextDecl = diffLines.some((line) => line.startsWith(' function longFunction()'));
+    assert.ok(
+      hasContextDecl,
+      'diff() with -W should include the function declaration as a context line, not only in the @@ header',
+    );
+  });
+
+  it('diff() retries without -W when output is empty', async () => {
+    // Structural test: verify git.mjs contains both the -W flag and a
+    // fallback construct that retries without it when output is empty.
+    const src = readFileSync(join(ROOT, 'src', 'util', 'git.mjs'), 'utf8');
+    assert.ok(src.includes("'-W'"), 'git.mjs must pass -W flag to git diff/show');
+    // Verify there is a fallback that strips -W when output is empty
+    assert.ok(
+      /if\s*\(\s*!out\b/.test(src),
+      'git.mjs must retry without -W when output is empty (expected "if (!out)" pattern)',
+    );
+  });
 });

@@ -47,10 +47,14 @@ async function hasParent(ref, cwd) {
 
 export async function diff(ref, cwd) {
   const excludes = ['--', '.', ':(exclude)package-lock.json', ':(exclude)*.lock'];
-  if (await hasParent(ref, cwd)) {
-    return git(['diff', ref + '~1..' + ref, ...excludes], cwd);
-  }
-  return git(['show', '--format=', ref, ...excludes], cwd);
+  const baseArgs = (await hasParent(ref, cwd))
+    ? ['diff', ref + '~1..' + ref]
+    : ['show', '--format=', ref];
+  // -W gives function-level context for richer diffs
+  let out = await git([...baseArgs, '-W', ...excludes], cwd);
+  // Fallback: retry without -W if it produced empty output (old git versions)
+  if (!out) out = await git([...baseArgs, ...excludes], cwd);
+  return out;
 }
 
 export async function filesChanged(ref, cwd) {
