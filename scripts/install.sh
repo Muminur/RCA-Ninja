@@ -241,8 +241,12 @@ check_claude() {
   claude_version="$(claude --version 2>/dev/null || echo 'unknown version')"
   success "Claude Code CLI installed — ${claude_version}"
 
-  printf "\n${YELLOW}${BOLD}Action required:${RESET}${YELLOW} Authenticate with Claude:${RESET}\n"
-  printf "  claude login\n\n"
+  printf "\n"
+  printf "${BOLD}${YELLOW}  ══════════════════════════════════════════════════════${RESET}\n"
+  printf "${BOLD}${YELLOW}  ACTION REQUIRED: You must authenticate before use!${RESET}\n"
+  printf "${BOLD}${YELLOW}  Run this command now:  claude login${RESET}\n"
+  printf "${BOLD}${YELLOW}  ══════════════════════════════════════════════════════${RESET}\n"
+  printf "\n"
 }
 
 # ---------------------------------------------------------------------------
@@ -279,7 +283,19 @@ install_npm() {
   # npm link must run from the package directory
   (cd "${INSTALL_DIR}" && npm link)
 
-  success "claude-rca linked to PATH"
+  # Add npm global bin to PATH for this session
+  local npm_prefix
+  npm_prefix="$(npm config get prefix 2>/dev/null || echo '')"
+  if [[ -n "$npm_prefix" ]] && [[ -d "${npm_prefix}/bin" ]]; then
+    export PATH="${npm_prefix}/bin:${PATH}"
+  fi
+
+  if command -v claude-rca &>/dev/null; then
+    success "claude-rca linked to PATH and verified"
+  else
+    warn "claude-rca linked but not found on PATH in this session."
+    info "Close and re-open your terminal, then verify with: claude-rca --version"
+  fi
 }
 
 # ---------------------------------------------------------------------------

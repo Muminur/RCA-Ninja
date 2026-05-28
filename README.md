@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?logo=nodedotjs&logoColor=white" alt="Node.js >= 20" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" />
-  <img src="https://img.shields.io/badge/tests-576%20passed-brightgreen" alt="576 Tests" />
+  <img src="https://img.shields.io/badge/tests-467%20passed-brightgreen" alt="467 Tests" />
   <img src="https://img.shields.io/badge/coverage-85%25-brightgreen" alt="85% Coverage" />
   <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="v0.1.0" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Cross-platform" />
@@ -277,14 +277,15 @@ claude-rca/
 ├── hooks/
 │   ├── post-commit         # Auto-generate on fix: commits
 │   ├── commit-msg          # Conventional Commits enforcement
-│   └── install-hook.sh     # Idempotent hook installer
+│   ├── install-hook.mjs    # Cross-platform hook installer (Node.js)
+│   └── install-hook.sh     # Legacy bash hook installer (fallback)
 ├── scripts/
 │   ├── install.sh          # macOS/Linux one-line installer
 │   └── install.ps1         # Windows PowerShell installer
 ├── .env.example            # Template for Obsidian API credentials
 ├── AGENTS.md               # Cross-tool AI discovery (Codex, Cursor, Copilot)
 ├── .claudeignore           # Excludes rca/ from incidental Claude Code scans
-└── test/                   # 472 tests (unit + integration + e2e)
+└── test/                   # 467 tests (unit + integration + e2e)
 ```
 
 ---
@@ -508,7 +509,9 @@ CLI flags override everything. Project config overrides XDG/defaults. Deep-merge
 ## Git Hooks (Optional)
 
 ```bash
-bash hooks/install-hook.sh
+claude-rca init     # recommended — installs hooks automatically
+# or manually:
+node hooks/install-hook.mjs
 ```
 
 Installs two hooks into `.git/hooks/`:
@@ -537,7 +540,7 @@ Enforces [Conventional Commits](https://www.conventionalcommits.org/) format. Ac
 
 `feat` · `fix` · `docs` · `style` · `refactor` · `perf` · `test` · `build` · `ci` · `chore` · `revert`
 
-Merge commits, `Revert`, `fixup!`, and `squash!` are always passed through. The installer is idempotent and never overwrites hooks it did not create. On install, it also verifies bash is available and attempts `npm link` to make `claude-rca` globally accessible on PATH.
+Merge commits, `Revert`, `fixup!`, and `squash!` are always passed through. The installer is idempotent and **auto-chains** with existing hooks (e.g., husky, pre-commit) instead of refusing to install. On install, it also verifies `claude-rca` is on PATH and attempts `npm link` if not. The Node.js installer (`install-hook.mjs`) works on Windows without Git Bash.
 
 ---
 
@@ -834,7 +837,7 @@ npm test                  # unit tests
 npm run test:integration  # integration tests
 npm run test:e2e          # e2e tests with claude-stub
 npm run coverage          # c8 report (target ≥83%)
-npm run check             # lint + typecheck + test + coverage gate (576 total)
+npm run check             # lint + typecheck + test + coverage gate
 npm run lint              # eslint + prettier
 npm run format            # auto-format with prettier
 ```

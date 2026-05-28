@@ -217,8 +217,10 @@ function Test-Claude {
     Write-OK "Claude Code CLI installed — $claudeVer"
 
     Write-Host ""
-    Write-Host "  Action required: Authenticate with Claude:" -ForegroundColor Yellow
-    Write-Host "    claude login"
+    Write-Host "  ══════════════════════════════════════════════════════" -ForegroundColor Yellow
+    Write-Host "  ACTION REQUIRED: You must authenticate before use!" -ForegroundColor Yellow
+    Write-Host "  Run this command now:  claude login" -ForegroundColor Yellow
+    Write-Host "  ══════════════════════════════════════════════════════" -ForegroundColor Yellow
     Write-Host ""
 }
 
@@ -261,7 +263,22 @@ function Invoke-NpmInstall {
         Pop-Location
     }
 
-    Write-OK "claude-rca linked to PATH"
+    # Refresh PATH so the symlink is visible in this session
+    $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' +
+                [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+
+    # Also add npm global bin directly in case env refresh missed it
+    $npmGlobal = try { (npm config get prefix 2>$null) } catch { '' }
+    if ($npmGlobal -and (Test-Path $npmGlobal)) {
+        $env:PATH = "$npmGlobal;$env:PATH"
+    }
+
+    if (Get-Command claude-rca -ErrorAction SilentlyContinue) {
+        Write-OK "claude-rca linked to PATH and verified"
+    } else {
+        Write-Warn "claude-rca linked but not yet on PATH in this session."
+        Write-Host "    Close and re-open your terminal, then verify with: claude-rca --version" -ForegroundColor Yellow
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -270,14 +287,15 @@ function Invoke-NpmInstall {
 function Invoke-Doctor {
     Write-Step "Running claude-rca doctor"
 
-    $exitCode = 0
+    $doctorOk = $true
     try {
         claude-rca doctor
+        if ($LASTEXITCODE -ne 0) { $doctorOk = $false }
     } catch {
-        $exitCode = $LASTEXITCODE
+        $doctorOk = $false
     }
 
-    if ($exitCode -ne 0) {
+    if (-not $doctorOk) {
         Write-Warn "doctor reported one or more issues above — review them before proceeding."
     } else {
         Write-OK "All environment checks passed"
