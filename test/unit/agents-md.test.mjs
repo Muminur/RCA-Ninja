@@ -13,12 +13,12 @@ describe('AGENTS.md', () => {
     assert.ok(existsSync(agentsMdPath), 'AGENTS.md must exist at repo root');
   });
 
-  it('AGENTS.md contains _manifest.yaml reference', () => {
+  it('AGENTS.md contains manifest index reference', () => {
     const agentsMdPath = join(ROOT, 'AGENTS.md');
     const content = readFileSync(agentsMdPath, 'utf8');
     assert.ok(
-      content.includes('_manifest.yaml'),
-      'AGENTS.md must reference _manifest.yaml for AI discovery',
+      content.includes('_manifest.jsonl') || content.includes('_manifest.yaml'),
+      'AGENTS.md must reference the RCA manifest for AI discovery',
     );
   });
 
@@ -37,12 +37,12 @@ describe('AGENTS.md', () => {
     );
   });
 
-  it('AGENTS.md recommends claude-rca search --files for file-based RCA lookup', () => {
+  it('AGENTS.md recommends codex-rca search --files for file-based RCA lookup', () => {
     const agentsMdPath = join(ROOT, 'AGENTS.md');
     const content = readFileSync(agentsMdPath, 'utf8');
     assert.ok(
-      content.includes('claude-rca search --files'),
-      'AGENTS.md must recommend `claude-rca search --files <path>` as the manifest-first search workflow',
+      content.includes('codex-rca search --files'),
+      'AGENTS.md must recommend `codex-rca search --files <path>` as the manifest-first search workflow',
     );
   });
 });

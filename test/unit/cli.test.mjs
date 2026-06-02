@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const BIN = join(ROOT, 'bin', 'claude-rca');
+const CODEX_BIN = join(ROOT, 'bin', 'codex-rca');
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
 describe('cli', () => {
@@ -28,6 +29,24 @@ describe('cli', () => {
     assert.ok(out.includes('generate'));
     assert.ok(out.includes('search'));
     assert.ok(out.includes('init'));
+  });
+
+  it('codex-rca alias prints Codex-facing help', () => {
+    const out = execFileSync('node', [CODEX_BIN, 'help'], {
+      encoding: 'utf8',
+      cwd: ROOT,
+    });
+    assert.ok(out.includes('codex-rca'));
+    assert.ok(out.includes('generate'));
+    assert.ok(out.includes('search'));
+  });
+
+  it('codex-rca alias prints the version from package.json', () => {
+    const out = execFileSync('node', [CODEX_BIN, 'version'], {
+      encoding: 'utf8',
+      cwd: ROOT,
+    }).trim();
+    assert.strictEqual(out, pkg.version);
   });
 
   it('exits 0 on --help', () => {

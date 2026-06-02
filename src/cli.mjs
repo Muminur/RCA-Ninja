@@ -27,11 +27,13 @@ const pkg = require(join(__dirname, '..', 'package.json'));
 
 export function createProgram() {
   const program = new Command();
+  const invokedName = basename(process.argv[1] || 'claude-rca');
+  const cliName = invokedName === 'codex-rca' ? 'codex-rca' : 'claude-rca';
 
   program
-    .name('claude-rca')
+    .name(cliName)
     .description(
-      'Local-first CLI that generates structured Root Cause Analysis artifacts from bug-fix commits',
+      'Local-first RCA CLI for Codex and Claude workflows that generates structured Root Cause Analysis artifacts from bug-fix commits',
     )
     .version(pkg.version)
     .option('--cwd <path>', 'Run as if from <path>')
@@ -90,26 +92,24 @@ export function createProgram() {
               }
             }
             if (result.status !== 0 && !out) {
-              process.stderr.write(
-                `⚠ git hooks not installed (not a git repo?)\n`,
-              );
+              process.stderr.write(`⚠ git hooks not installed (not a git repo?)\n`);
             }
           } catch {
             process.stderr.write(`⚠ git hooks not installed (installer failed)\n`);
           }
 
-          // Verify claude-rca is on PATH (hook installer does this too,
+          // Verify the invoked CLI is on PATH (hook installer does this too,
           // but repeat here in case the installer was skipped or failed)
           try {
             const { spawnSync: spawnCheck } = await import('node:child_process');
             const which = spawnCheck(
               process.platform === 'win32' ? 'where.exe' : 'which',
-              ['claude-rca'],
+              [cliName],
               { shell: false, stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 },
             );
             if (which.status !== 0) {
               process.stderr.write(
-                `⚠ claude-rca is not on PATH — the post-commit hook will not fire.\n`,
+                `⚠ ${cliName} is not on PATH — the post-commit hook will not fire.\n`,
               );
               process.stderr.write(`  Run: cd ${join(__dirname, '..')} && npm link\n`);
             }

@@ -512,7 +512,7 @@ export async function startMcpServer({ cwd } = {}) {
   const tools = getToolsForConfig(cfg);
 
   const server = new Server(
-    { name: 'claude-rca', version: '0.1.0' },
+    { name: 'codex-rca', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
 

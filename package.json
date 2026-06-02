@@ -1,12 +1,13 @@
 {
-  "name": "claude-rca",
+  "name": "codex-rca",
   "version": "0.1.0",
-  "description": "Local-first CLI that turns bug-fix commits into structured Root Cause Analysis Markdown artifacts",
+  "description": "Root cause analysis (RCA) CLI for Codex and Claude that turns bug-fix commits into searchable postmortem Markdown artifacts",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "bin": {
+    "codex-rca": "./bin/codex-rca",
     "claude-rca": "./bin/claude-rca"
   },
   "scripts": {
@@ -15,7 +16,7 @@
     "test:integration": "node --test \"test/integration/**/*.test.mjs\"",
     "test:e2e": "node --test \"test/e2e/**/*.test.mjs\"",
     "test:watch": "node --test --watch \"test/unit/**/*.test.mjs\"",
-    "lint": "eslint \"src/**/*.mjs\" \"test/**/*.mjs\" bin/claude-rca && prettier --check \"**/*.{mjs,json,md}\"",
+    "lint": "eslint \"src/**/*.mjs\" \"test/**/*.mjs\" bin/claude-rca bin/codex-rca && prettier --check \"**/*.{mjs,json,md}\"",
     "format": "prettier --write \"**/*.{mjs,json,md}\"",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "coverage": "c8 --include \"src/**/*.mjs\" --exclude \"src/mcp-server.mjs\" --reporter text --reporter html node --test \"test/unit/**/*.test.mjs\" \"test/integration/**/*.test.mjs\"",
@@ -25,7 +26,12 @@
   "keywords": [
     "rca",
     "root-cause-analysis",
+    "root-cause-analysis-tool",
+    "codex",
     "claude",
+    "ai-agents",
+    "incident-response",
+    "bug-analysis",
     "postmortem",
     "obsidian"
   ],
