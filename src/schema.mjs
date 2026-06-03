@@ -23,6 +23,14 @@ const CONFIG_SCHEMA = {
         max_retries: { type: 'integer', minimum: 0, maximum: 5, default: 1 },
       },
     },
+    codex: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        binary: { type: 'string', default: 'codex' },
+        timeout_ms: { type: 'integer', minimum: 1000, default: 60000 },
+      },
+    },
     obsidian: {
       type: 'object',
       additionalProperties: false,
