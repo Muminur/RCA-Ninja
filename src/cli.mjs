@@ -233,7 +233,19 @@ export function createProgram() {
           () => execSync('rg', ['--version'], { encoding: 'utf8' }).trim().split('\n')[0],
         );
 
-        doctorCheck('claude', () => execSync('claude', ['--version'], { encoding: 'utf8' }).trim());
+        let setupProvider = 'claude';
+        let setupBinary = 'claude';
+        try {
+          const cfg = loadConfig({ cwd, configPath });
+          setupProvider = cfg.provider || 'claude';
+          setupBinary =
+            setupProvider === 'codex' ? cfg.codex?.binary || 'codex' : cfg.claude?.binary || 'claude';
+        } catch {
+          /* fall back to claude defaults */
+        }
+        doctorCheck(setupProvider, () =>
+          execSync(setupBinary.split(/\s+/)[0], ['--version'], { encoding: 'utf8' }).trim(),
+        );
 
         const maxName = Math.max(...doctorChecks.map((c) => c.name.length));
         for (const c of doctorChecks) {
@@ -752,9 +764,22 @@ export function createProgram() {
         return ver;
       });
 
-      check('claude', () => {
-        const ver = execSync('claude', ['--version'], { encoding: 'utf8' }).trim();
-        return ver;
+      // Check the binary for the configured LLM provider (claude or codex), not
+      // a hardcoded one — a codex user must not fail doctor for lacking claude.
+      let providerName = 'claude';
+      let providerBinary = 'claude';
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        providerName = cfg.provider || 'claude';
+        providerBinary =
+          providerName === 'codex' ? cfg.codex?.binary || 'codex' : cfg.claude?.binary || 'claude';
+      } catch {
+        /* fall back to claude defaults */
+      }
+      check(providerName, () => {
+        const bin = providerBinary.split(/\s+/)[0];
+        return execSync(bin, ['--version'], { encoding: 'utf8' }).trim();
       });
 
       const maxName = Math.max(...checks.map((c) => c.name.length));
