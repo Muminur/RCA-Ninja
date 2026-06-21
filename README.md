@@ -524,25 +524,25 @@ claude-rca config --set provider=claude
 claude-rca config --set provider=codex
 ```
 
-| Concern              | `claude` (default)                                              | `codex`                                                            |
-| -------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Invocation           | `claude -p … --json-schema … --allowedTools Read`              | `codex exec --sandbox read-only --output-schema … -o …`           |
-| Read-only guarantee  | `--permission-mode plan` + `--allowedTools Read`               | `--sandbox read-only`                                             |
-| Structured output    | `--json-schema` (native)                                       | `--output-schema` (OpenAI strict mode; derived automatically)     |
-| Context delivery     | temp files read via the model's Read tool                      | inlined and piped via **stdin** (no OS arg-length limit)          |
-| Auth                 | `claude login`                                                 | `codex login` (or `OPENAI_API_KEY`)                               |
+| Concern             | `claude` (default)                                | `codex`                                                       |
+| ------------------- | ------------------------------------------------- | ------------------------------------------------------------- |
+| Invocation          | `claude -p … --json-schema … --allowedTools Read` | `codex exec --sandbox read-only --output-schema … -o …`       |
+| Read-only guarantee | `--permission-mode plan` + `--allowedTools Read`  | `--sandbox read-only`                                         |
+| Structured output   | `--json-schema` (native)                          | `--output-schema` (OpenAI strict mode; derived automatically) |
+| Context delivery    | temp files read via the model's Read tool         | inlined and piped via **stdin** (no OS arg-length limit)      |
+| Auth                | `claude login`                                    | `codex login` (or `OPENAI_API_KEY`)                           |
 
 Both adapters are validated locally with the same AJV schema after the model responds, so output guarantees are identical regardless of provider. `claude-rca doctor` checks whichever provider's binary you configured.
 
 ### Codex configuration keys
 
-| Key                  | Default      | Description                                                       |
-| -------------------- | ------------ | ---------------------------------------------------------------- |
-| `codex.binary`       | `codex`      | Codex executable (or `node /path/to/stub.mjs` for testing)       |
-| `codex.sandbox`      | `read-only`  | `read-only` · `workspace-write` · `danger-full-access`           |
-| `codex.model`        | —            | Optional model override passed as `--model`                      |
-| `codex.timeout_ms`   | `120000`     | Per-invocation timeout                                            |
-| `codex.max_retries`  | `1`          | Retries on schema-validation failure                             |
+| Key                 | Default     | Description                                                |
+| ------------------- | ----------- | ---------------------------------------------------------- |
+| `codex.binary`      | `codex`     | Codex executable (or `node /path/to/stub.mjs` for testing) |
+| `codex.sandbox`     | `read-only` | `read-only` · `workspace-write` · `danger-full-access`     |
+| `codex.model`       | —           | Optional model override passed as `--model`                |
+| `codex.timeout_ms`  | `120000`    | Per-invocation timeout                                     |
+| `codex.max_retries` | `1`         | Retries on schema-validation failure                       |
 
 > **Note:** Codex requires an authenticated session (`codex login`) and available usage quota, exactly as Claude Code requires `claude login`. If neither provider is reachable, `claude-rca doctor` reports it.
 
