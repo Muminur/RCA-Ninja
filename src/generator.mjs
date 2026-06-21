@@ -98,7 +98,10 @@ export async function generate({
     let lastError;
     for (let attempt = 0; attempt <= inv.maxRetries; attempt++) {
       try {
-        const { stdout } = await run(inv.cmd, inv.argv, { timeoutMs: inv.timeoutMs });
+        const { stdout } = await run(inv.cmd, inv.argv, {
+          timeoutMs: inv.timeoutMs,
+          input: inv.input,
+        });
         const { rcaData, cost, sessionId } = inv.extractRca(stdout);
 
         if (rcaData) {

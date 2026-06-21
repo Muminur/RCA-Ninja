@@ -11,6 +11,7 @@ const CONFIG_SCHEMA = {
     enabled: { type: 'boolean', default: true },
     output_dir: { type: 'string', default: './rca' },
     auto_generate: { type: 'boolean', default: false },
+    provider: { enum: ['claude', 'codex'], default: 'claude' },
     claude: {
       type: 'object',
       additionalProperties: false,
@@ -20,6 +21,20 @@ const CONFIG_SCHEMA = {
         permission_mode: { enum: ['plan', 'default', 'bypassPermissions'], default: 'plan' },
         allowed_tools: { type: 'string', default: 'Read,Bash' },
         timeout_ms: { type: 'integer', minimum: 1000, default: 60000 },
+        max_retries: { type: 'integer', minimum: 0, maximum: 5, default: 1 },
+      },
+    },
+    codex: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        binary: { type: 'string', default: 'codex' },
+        sandbox: {
+          enum: ['read-only', 'workspace-write', 'danger-full-access'],
+          default: 'read-only',
+        },
+        model: { type: 'string' },
+        timeout_ms: { type: 'integer', minimum: 1000, default: 120000 },
         max_retries: { type: 'integer', minimum: 0, maximum: 5, default: 1 },
       },
     },

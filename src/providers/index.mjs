@@ -7,9 +7,11 @@
 
 import { RcaError } from '../errors.mjs';
 import * as claude from './claude.mjs';
+import * as codex from './codex.mjs';
 
 const REGISTRY = {
   claude,
+  codex,
 };
 
 /** Provider names that have a registered adapter. */
