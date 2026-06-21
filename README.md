@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  A local-first CLI that wraps <code>claude -p</code> to produce validated, searchable RCA Markdown artifacts from <code>git diff</code> output — with optional Obsidian vault sync.
+  A local-first, <strong>LLM-agnostic</strong> CLI that drives your coding agent CLI — <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> (<code>claude -p</code>) or <a href="https://github.com/openai/codex">OpenAI Codex</a> (<code>codex exec</code>) — to produce validated, searchable RCA Markdown artifacts from <code>git diff</code> output, with optional Obsidian vault sync.
 </p>
 
 ---
@@ -107,9 +107,9 @@ cd RCA-Ninja
 npm ci && npm link
 ```
 
-> **Prerequisites:** Node.js >= 20 · git >= 2.20 · [ripgrep](https://github.com/BurntSushi/ripgrep#installation) · [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`npm i -g @anthropic-ai/claude-code && claude login`)
+> **Prerequisites:** Node.js >= 20 · git >= 2.20 · [ripgrep](https://github.com/BurntSushi/ripgrep#installation) · **one LLM CLI**: either [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`npm i -g @anthropic-ai/claude-code && claude login`) or [OpenAI Codex](https://github.com/openai/codex) (`npm i -g @openai/codex && codex login`).
 >
-> RCA generation works with your Claude.ai OAuth login — no separate API key needed.
+> RCA generation works with your Claude.ai or ChatGPT OAuth login — no separate API key needed. Choose the backend with `claude-rca config --set provider=claude|codex` (see [LLM Providers](#llm-providers-claude-code-or-codex)).
 
 ---
 
@@ -466,12 +466,19 @@ claude-rca config --set <key>=<value> # Write a value
 {
   "version": 1,
   "output_dir": "./rca",
+  "provider": "claude",
   "claude": {
     "binary": "claude",
     "use_bare": true,
     "permission_mode": "plan",
     "allowed_tools": "Read",
     "timeout_ms": 60000,
+    "max_retries": 1
+  },
+  "codex": {
+    "binary": "codex",
+    "sandbox": "read-only",
+    "timeout_ms": 120000,
     "max_retries": 1
   },
   "obsidian": {
@@ -502,6 +509,42 @@ graph LR
 ```
 
 CLI flags override everything. Project config overrides XDG/defaults. Deep-merge for objects, replace for arrays.
+
+---
+
+## LLM Providers (Claude Code or Codex)
+
+RCA-Ninja is **LLM-agnostic**. Generation, amend, and the quality analyst all run through a small provider abstraction (`src/providers/`), so the same workflow works whether you drive [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or the [OpenAI Codex CLI](https://github.com/openai/codex). Pick one with `provider`:
+
+```bash
+# Use Claude Code (default)
+claude-rca config --set provider=claude
+
+# Use OpenAI Codex
+claude-rca config --set provider=codex
+```
+
+| Concern              | `claude` (default)                                              | `codex`                                                            |
+| -------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Invocation           | `claude -p … --json-schema … --allowedTools Read`              | `codex exec --sandbox read-only --output-schema … -o …`           |
+| Read-only guarantee  | `--permission-mode plan` + `--allowedTools Read`               | `--sandbox read-only`                                             |
+| Structured output    | `--json-schema` (native)                                       | `--output-schema` (OpenAI strict mode; derived automatically)     |
+| Context delivery     | temp files read via the model's Read tool                      | inlined and piped via **stdin** (no OS arg-length limit)          |
+| Auth                 | `claude login`                                                 | `codex login` (or `OPENAI_API_KEY`)                               |
+
+Both adapters are validated locally with the same AJV schema after the model responds, so output guarantees are identical regardless of provider. `claude-rca doctor` checks whichever provider's binary you configured.
+
+### Codex configuration keys
+
+| Key                  | Default      | Description                                                       |
+| -------------------- | ------------ | ---------------------------------------------------------------- |
+| `codex.binary`       | `codex`      | Codex executable (or `node /path/to/stub.mjs` for testing)       |
+| `codex.sandbox`      | `read-only`  | `read-only` · `workspace-write` · `danger-full-access`           |
+| `codex.model`        | —            | Optional model override passed as `--model`                      |
+| `codex.timeout_ms`   | `120000`     | Per-invocation timeout                                            |
+| `codex.max_retries`  | `1`          | Retries on schema-validation failure                             |
+
+> **Note:** Codex requires an authenticated session (`codex login`) and available usage quota, exactly as Claude Code requires `claude login`. If neither provider is reachable, `claude-rca doctor` reports it.
 
 ---
 

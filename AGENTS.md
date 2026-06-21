@@ -6,7 +6,7 @@ This file helps AI assistants (Claude, Codex, Cursor, etc.) navigate the RCA cor
 
 ## Project Overview
 
-`claude-rca` is a local-first CLI that turns bug-fix commits into structured Root Cause Analysis Markdown artifacts. It orchestrates Claude Code in headless bare mode with a pinned JSON schema to produce validated, searchable RCA documents.
+`claude-rca` is a local-first, LLM-agnostic CLI that turns bug-fix commits into structured Root Cause Analysis Markdown artifacts. It drives a headless coding-agent CLI — Claude Code (`claude -p`) or OpenAI Codex (`codex exec`), selectable via `provider` in `.claude-rca.json` — with a pinned JSON schema to produce validated, searchable RCA documents. All LLM-specific logic is isolated in `src/providers/`.
 
 ---
 
