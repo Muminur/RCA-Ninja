@@ -6,6 +6,7 @@ import { run } from './util/exec.mjs';
 import { validateRca } from './schema.mjs';
 import { RcaError } from './errors.mjs';
 import { estimatePayload, TOKEN_WARN_THRESHOLD, TOKEN_HARD_LIMIT } from './token-estimate.mjs';
+import { getProvider } from './providers/index.mjs';
 
 const SECRET_REGEX = new RegExp(
   [
@@ -47,6 +48,7 @@ export async function generate({
 }) {
   const contextFile = join(tmpdir(), `claude-rca-ctx-${randomUUID()}.json`);
   const diffFile = join(tmpdir(), `claude-rca-diff-${randomUUID()}.txt`);
+  let inv;
 
   try {
     writeFileSync(
@@ -81,43 +83,23 @@ export async function generate({
     }
     process.stderr.write(`INFO: estimated_tokens=${estimate.total}\n`);
 
-    const binaryRaw = config.claude?.binary || 'claude';
-    const binaryParts = binaryRaw.split(/\s+/);
-    const cmd = binaryParts[0];
-    const cmdPrefix = binaryParts.slice(1);
-    const permissionMode = config.claude?.permission_mode || 'plan';
-    const allowedTools = config.claude?.allowed_tools || 'Read';
-    const timeoutMs = config.claude?.timeout_ms || 60000;
-    const maxRetries = config.claude?.max_retries ?? 1;
-
-    const argv = [...cmdPrefix];
-    let prompt = `Read ${contextFile} and ${diffFile} and produce an RCA.`;
-    if (correctionHint) prompt += `\n\nCorrection hint: ${correctionHint}`;
-    argv.push('-p', prompt);
-    argv.push('--append-system-prompt', systemPrompt);
-    argv.push('--output-format', 'json');
-    argv.push('--json-schema', schema);
-    argv.push('--allowedTools', allowedTools);
-    argv.push('--permission-mode', permissionMode);
+    const provider = getProvider(config.provider);
+    inv = provider.buildGenerateInvocation({
+      config,
+      contextFile,
+      diffFile,
+      systemPrompt,
+      schemaStr: schema,
+      correctionHint,
+      context,
+      priorRcas,
+    });
 
     let lastError;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= inv.maxRetries; attempt++) {
       try {
-        const { stdout } = await run(cmd, argv, { timeoutMs });
-        const parsed = JSON.parse(stdout);
-        let rcaData = parsed.structured_output;
-
-        if (!rcaData && parsed.result) {
-          const jsonMatch = parsed.result.match(/```json\s*([\s\S]*?)```/);
-          const raw = jsonMatch ? jsonMatch[1].trim() : parsed.result.trim();
-          try {
-            rcaData = JSON.parse(raw);
-          } catch (parseErr) {
-            throw new RcaError('SCHEMA_VALIDATION', {
-              ajv_first_error: `Could not parse RCA JSON from claude output: ${parseErr.message}`,
-            });
-          }
-        }
+        const { stdout } = await run(inv.cmd, inv.argv, { timeoutMs: inv.timeoutMs });
+        const { rcaData, cost, sessionId } = inv.extractRca(stdout);
 
         if (rcaData) {
           const ALLOWED_KEYS = new Set([
@@ -191,14 +173,14 @@ export async function generate({
 
           return {
             rca: result.data,
-            cost: parsed.total_cost_usd,
-            sessionId: parsed.session_id,
+            cost,
+            sessionId,
             autoFilled,
           };
         }
       } catch (err) {
         lastError = err;
-        if (err.code === 'SCHEMA_VALIDATION' && attempt < maxRetries) {
+        if (err.code === 'SCHEMA_VALIDATION' && attempt < inv.maxRetries) {
           continue;
         }
         if (err.code === 'SCHEMA_VALIDATION') throw err;
@@ -210,6 +192,11 @@ export async function generate({
     }
     throw lastError;
   } finally {
+    try {
+      inv?.cleanup?.();
+    } catch {
+      /* cleanup */
+    }
     try {
       unlinkSync(contextFile);
     } catch {
