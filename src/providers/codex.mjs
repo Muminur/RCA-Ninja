@@ -101,7 +101,14 @@ function codexBaseArgs(cmdPrefix, c) {
  * Build a generation invocation for the Codex CLI. Same interface as the Claude
  * adapter; see src/providers/claude.mjs.
  */
-export function buildGenerateInvocation({ config, systemPrompt, schemaStr, correctionHint, context, priorRcas }) {
+export function buildGenerateInvocation({
+  config,
+  systemPrompt,
+  schemaStr,
+  correctionHint,
+  context,
+  priorRcas,
+}) {
   const c = config.codex || {};
   const { cmd, cmdPrefix } = resolveBinary(c.binary, defaultBinary);
 
@@ -122,13 +129,10 @@ export function buildGenerateInvocation({ config, systemPrompt, schemaStr, corre
     timeoutMs: c.timeout_ms || 120000,
     maxRetries: c.max_retries ?? 1,
     extractRca: () => {
-      let body;
-      try {
-        body = readFileSync(outFile, 'utf8');
-      } catch (err) {
-        // Exit 0 but no final-message file written — treat as an LLM failure.
-        throw new Error(`codex produced no output file: ${err.message}`);
-      }
+      // A missing output file (codex exited 0 but wrote no final message)
+      // surfaces as a native fs error here; the generator maps any non-schema
+      // error to CLAUDE_FAILURE (exit 21).
+      const body = readFileSync(outFile, 'utf8');
       return { rcaData: extractJsonObject(body), cost: undefined, sessionId: undefined };
     },
     cleanup: () => {

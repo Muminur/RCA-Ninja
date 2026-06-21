@@ -40,7 +40,10 @@ export async function runAnalyst({ writtenPath, systemPromptPath, config, _spawn
   try {
     let stdout;
     try {
-      const result = await spawnFn(inv.cmd, inv.argv, { timeoutMs: inv.timeoutMs, input: inv.input });
+      const result = await spawnFn(inv.cmd, inv.argv, {
+        timeoutMs: inv.timeoutMs,
+        input: inv.input,
+      });
       stdout = result.stdout;
     } catch (err) {
       throw new RcaError('CLAUDE_FAILURE', { detail: err.message });

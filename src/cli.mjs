@@ -239,7 +239,9 @@ export function createProgram() {
           const cfg = loadConfig({ cwd, configPath });
           setupProvider = cfg.provider || 'claude';
           setupBinary =
-            setupProvider === 'codex' ? cfg.codex?.binary || 'codex' : cfg.claude?.binary || 'claude';
+            setupProvider === 'codex'
+              ? cfg.codex?.binary || 'codex'
+              : cfg.claude?.binary || 'claude';
         } catch {
           /* fall back to claude defaults */
         }

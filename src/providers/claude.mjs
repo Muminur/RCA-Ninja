@@ -58,7 +58,14 @@ function extractRca(stdout) {
  * @returns {{ cmd: string, argv: string[], timeoutMs: number, maxRetries: number,
  *            extractRca: (stdout: string) => object, cleanup: () => void }}
  */
-export function buildGenerateInvocation({ config, contextFile, diffFile, systemPrompt, schemaStr, correctionHint }) {
+export function buildGenerateInvocation({
+  config,
+  contextFile,
+  diffFile,
+  systemPrompt,
+  schemaStr,
+  correctionHint,
+}) {
   const c = config.claude || {};
   const { cmd, cmdPrefix } = resolveBinary(c.binary, defaultBinary);
   const permissionMode = c.permission_mode || 'plan';
