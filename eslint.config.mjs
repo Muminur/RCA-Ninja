@@ -90,7 +90,7 @@ export default [
     },
   },
   {
-    files: ['bin/claude-rca'],
+    files: ['bin/claude-rca', 'bin/codex-rca'],
     languageOptions: {
       ecmaVersion: 2025,
       sourceType: 'module',

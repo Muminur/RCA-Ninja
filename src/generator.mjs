@@ -38,63 +38,29 @@ export function buildContextPayload({ context, priorRcas, diffFile }) {
   };
 }
 
-export async function generate({
-  context,
-  config,
-  systemPromptPath,
-  schemaPath,
-  correctionHint,
-  priorRcas,
-}) {
-  const contextFile = join(tmpdir(), `claude-rca-ctx-${randomUUID()}.json`);
-  const diffFile = join(tmpdir(), `claude-rca-diff-${randomUUID()}.txt`);
-  let inv;
+/**
+ * Run generation through a single named provider (claude or codex): build the
+ * invocation, run it with schema-validation retries, then post-process and
+ * validate the RCA. Throws RcaError SCHEMA_VALIDATION (already retried) or
+ * CLAUDE_FAILURE. The invocation's own temp files are cleaned up here.
+ */
+async function runProviderGenerate(
+  providerName,
+  { config, context, contextFile, diffFile, systemPrompt, schema, correctionHint, priorRcas },
+) {
+  const provider = getProvider(providerName);
+  const inv = provider.buildGenerateInvocation({
+    config,
+    contextFile,
+    diffFile,
+    systemPrompt,
+    schemaStr: schema,
+    correctionHint,
+    context,
+    priorRcas,
+  });
 
   try {
-    writeFileSync(
-      contextFile,
-      JSON.stringify(buildContextPayload({ context, priorRcas, diffFile })),
-    );
-    writeFileSync(diffFile, context.diff);
-
-    const systemPrompt = readFileSync(systemPromptPath, 'utf8');
-    const schema = readFileSync(schemaPath, 'utf8');
-
-    const systemPromptStr = systemPrompt;
-    const schemaStr = schema;
-    const contextJsonStr = JSON.stringify(buildContextPayload({ context, priorRcas, diffFile }));
-    const estimate = estimatePayload({
-      systemPrompt: systemPromptStr,
-      schema: schemaStr,
-      contextJson: contextJsonStr,
-      diff: context.diff,
-      priorRcas: JSON.stringify(priorRcas || []),
-    });
-
-    if (estimate.total > TOKEN_HARD_LIMIT) {
-      throw new RcaError('TOKEN_BUDGET_EXCEEDED', {
-        reason: `Estimated ${estimate.total} tokens exceeds hard limit of ${TOKEN_HARD_LIMIT}. Breakdown: system=${estimate.breakdown.system}, schema=${estimate.breakdown.schema}, context=${estimate.breakdown.context}, diff=${estimate.breakdown.diff}, prior=${estimate.breakdown.prior}`,
-      });
-    }
-    if (estimate.total > TOKEN_WARN_THRESHOLD) {
-      process.stderr.write(
-        `WARN: Token estimate ${estimate.total} exceeds warning threshold (${TOKEN_WARN_THRESHOLD}). Breakdown: ${JSON.stringify(estimate.breakdown)}\n`,
-      );
-    }
-    process.stderr.write(`INFO: estimated_tokens=${estimate.total}\n`);
-
-    const provider = getProvider(config.provider);
-    inv = provider.buildGenerateInvocation({
-      config,
-      contextFile,
-      diffFile,
-      systemPrompt,
-      schemaStr: schema,
-      correctionHint,
-      context,
-      priorRcas,
-    });
-
     let lastError;
     for (let attempt = 0; attempt <= inv.maxRetries; attempt++) {
       try {
@@ -200,6 +166,80 @@ export async function generate({
     } catch {
       /* cleanup */
     }
+  }
+}
+
+export async function generate({
+  context,
+  config,
+  systemPromptPath,
+  schemaPath,
+  correctionHint,
+  priorRcas,
+}) {
+  const contextFile = join(tmpdir(), `claude-rca-ctx-${randomUUID()}.json`);
+  const diffFile = join(tmpdir(), `claude-rca-diff-${randomUUID()}.txt`);
+
+  try {
+    writeFileSync(
+      contextFile,
+      JSON.stringify(buildContextPayload({ context, priorRcas, diffFile })),
+    );
+    writeFileSync(diffFile, context.diff);
+
+    const systemPrompt = readFileSync(systemPromptPath, 'utf8');
+    const schema = readFileSync(schemaPath, 'utf8');
+
+    const contextJsonStr = JSON.stringify(buildContextPayload({ context, priorRcas, diffFile }));
+    const estimate = estimatePayload({
+      systemPrompt,
+      schema,
+      contextJson: contextJsonStr,
+      diff: context.diff,
+      priorRcas: JSON.stringify(priorRcas || []),
+    });
+
+    if (estimate.total > TOKEN_HARD_LIMIT) {
+      throw new RcaError('TOKEN_BUDGET_EXCEEDED', {
+        reason: `Estimated ${estimate.total} tokens exceeds hard limit of ${TOKEN_HARD_LIMIT}. Breakdown: system=${estimate.breakdown.system}, schema=${estimate.breakdown.schema}, context=${estimate.breakdown.context}, diff=${estimate.breakdown.diff}, prior=${estimate.breakdown.prior}`,
+      });
+    }
+    if (estimate.total > TOKEN_WARN_THRESHOLD) {
+      process.stderr.write(
+        `WARN: Token estimate ${estimate.total} exceeds warning threshold (${TOKEN_WARN_THRESHOLD}). Breakdown: ${JSON.stringify(estimate.breakdown)}\n`,
+      );
+    }
+    process.stderr.write(`INFO: estimated_tokens=${estimate.total}\n`);
+
+    const runOpts = {
+      config,
+      context,
+      contextFile,
+      diffFile,
+      systemPrompt,
+      schema,
+      correctionHint,
+      priorRcas,
+    };
+
+    // Run the configured provider. On a non-schema failure of the default
+    // (claude) provider, fall back to codex when it is explicitly configured —
+    // the "Claude unavailable → Codex" resilience feature. We gate on
+    // `config.codex` (which has no schema defaults, so it is only present when
+    // the user opts in); `config.claude` is always defaulted, so we never
+    // auto-fall-back the other direction onto the real claude binary.
+    const primaryName = config.provider || 'claude';
+    try {
+      return await runProviderGenerate(primaryName, runOpts);
+    } catch (primaryErr) {
+      if (primaryErr.code === 'SCHEMA_VALIDATION') throw primaryErr;
+      if (primaryName === 'claude' && config.codex) {
+        process.stderr.write('WARN: claude generation failed; falling back to codex.\n');
+        return await runProviderGenerate('codex', runOpts);
+      }
+      throw primaryErr;
+    }
+  } finally {
     try {
       unlinkSync(contextFile);
     } catch {

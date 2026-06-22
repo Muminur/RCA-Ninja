@@ -10,6 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const BIN = join(ROOT, 'bin', 'claude-rca');
 const STUB = join(ROOT, 'test', 'fixtures', 'claude-stub.mjs');
+const CODEX_STUB = join(ROOT, 'test', 'fixtures', 'codex-stub.mjs');
 
 function git(args, cwd) {
   return execFileSync('git', args, {
@@ -33,6 +34,16 @@ function makeConfig(tmp, overrides = {}) {
     version: 1,
     output_dir: './rca',
     claude: { binary: `node ${STUB}`, ...overrides },
+  };
+  writeFileSync(join(tmp, '.claude-rca.json'), JSON.stringify(config));
+}
+
+function makeFallbackConfig(tmp) {
+  const config = {
+    version: 1,
+    output_dir: './rca',
+    claude: { binary: 'claude-not-installed-for-test' },
+    codex: { binary: `node ${CODEX_STUB}` },
   };
   writeFileSync(join(tmp, '.claude-rca.json'), JSON.stringify(config));
 }
@@ -106,6 +117,21 @@ describe('generate e2e', () => {
     makeConfig(tmp);
     const err = runCliErr(['generate'], tmp, { CLAUDE_STUB_EXIT: '1' });
     assert.strictEqual(err.status, 21);
+  });
+
+  it('falls back to Codex and writes an RCA when Claude is unavailable', () => {
+    const logPath = join(tmp, 'codex-stub.log');
+    makeFallbackConfig(tmp);
+    const stdout = runCli(['generate'], tmp, { CODEX_STUB_LOG: logPath });
+    const rcaPath = stdout.trim();
+    assert.ok(rcaPath.endsWith('.md'), 'stdout must be the RCA path');
+    assert.ok(existsSync(rcaPath), 'RCA file must exist');
+    const content = readFileSync(rcaPath, 'utf8');
+    assert.ok(content.includes('## Symptom'), 'fallback must produce a rendered RCA via Codex');
+    const log = readFileSync(logPath, 'utf8');
+    const entry = JSON.parse(log.trim().split('\n')[0]);
+    assert.deepStrictEqual(entry.argv.slice(0, 1), ['exec']);
+    assert.ok(entry.argv.includes('--output-schema'), 'Codex fallback must request schema output');
   });
 
   it('asserts --permission-mode plan in stub argv log', () => {

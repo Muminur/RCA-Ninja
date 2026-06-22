@@ -27,11 +27,13 @@ const pkg = require(join(__dirname, '..', 'package.json'));
 
 export function createProgram() {
   const program = new Command();
+  const invokedName = basename(process.argv[1] || 'claude-rca');
+  const cliName = invokedName === 'codex-rca' ? 'codex-rca' : 'claude-rca';
 
   program
-    .name('claude-rca')
+    .name(cliName)
     .description(
-      'Local-first CLI that generates structured Root Cause Analysis artifacts from bug-fix commits',
+      'Local-first RCA CLI for Codex and Claude workflows that generates structured Root Cause Analysis artifacts from bug-fix commits',
     )
     .version(pkg.version)
     .option('--cwd <path>', 'Run as if from <path>')
@@ -56,15 +58,27 @@ export function createProgram() {
         process.stderr.write(`✓ wrote ${configPath}\n`);
 
         if (opts.hooks !== false) {
-          const hookScript = join(__dirname, '..', 'hooks', 'install-hook.sh');
+          // Use Node.js hook installer (cross-platform) with bash fallback
+          const hookMjs = join(__dirname, '..', 'hooks', 'install-hook.mjs');
+          const hookSh = join(__dirname, '..', 'hooks', 'install-hook.sh');
           try {
             const { spawnSync } = await import('node:child_process');
-            const result = spawnSync('bash', [hookScript], {
-              cwd,
-              shell: false,
-              stdio: ['ignore', 'pipe', 'pipe'],
-              timeout: 10000,
-            });
+            let result;
+            if (existsSync(hookMjs)) {
+              result = spawnSync(process.execPath, [hookMjs, cwd], {
+                cwd,
+                shell: false,
+                stdio: ['ignore', 'pipe', 'pipe'],
+                timeout: 30000,
+              });
+            } else {
+              result = spawnSync('bash', [hookSh], {
+                cwd,
+                shell: false,
+                stdio: ['ignore', 'pipe', 'pipe'],
+                timeout: 10000,
+              });
+            }
             const out = result.stdout.toString('utf8').trim();
             const errOut = result.stderr.toString('utf8').trim();
             if (out) {
@@ -72,33 +86,35 @@ export function createProgram() {
                 if (line) process.stderr.write(`${line}\n`);
               }
             }
+            if (errOut) {
+              for (const line of errOut.split('\n')) {
+                if (line) process.stderr.write(`${line}\n`);
+              }
+            }
             if (result.status !== 0 && !out) {
-              process.stderr.write(
-                `⚠ git hooks not installed${errOut ? ': ' + errOut : ' (not a git repo?)'}\n`,
-              );
+              process.stderr.write(`⚠ git hooks not installed (not a git repo?)\n`);
             }
           } catch {
-            process.stderr.write(`⚠ git hooks not installed (bash not available)\n`);
+            process.stderr.write(`⚠ git hooks not installed (installer failed)\n`);
           }
 
-          // After hook installation, verify claude-rca is on PATH
+          // Verify the invoked CLI is on PATH (hook installer does this too,
+          // but repeat here in case the installer was skipped or failed)
           try {
             const { spawnSync: spawnCheck } = await import('node:child_process');
             const which = spawnCheck(
               process.platform === 'win32' ? 'where.exe' : 'which',
-              ['claude-rca'],
+              [cliName],
               { shell: false, stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 },
             );
             if (which.status !== 0) {
               process.stderr.write(
-                `⚠ claude-rca is not on PATH — the post-commit hook will not fire.\n`,
+                `⚠ ${cliName} is not on PATH — the post-commit hook will not fire.\n`,
               );
               process.stderr.write(`  Run: cd ${join(__dirname, '..')} && npm link\n`);
-            } else {
-              process.stderr.write(`✓ claude-rca is on PATH\n`);
             }
           } catch {
-            process.stderr.write(`⚠ could not verify claude-rca on PATH\n`);
+            // Ignore — best-effort check
           }
         }
       } catch (err) {

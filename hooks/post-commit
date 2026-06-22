@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# claude-rca post-commit hook — generates an RCA when the commit
+# codex-rca / claude-rca post-commit hook — generates an RCA when the commit
 # message starts with "fix:" (Conventional Commits) and the user has
 # enabled auto_generate in config.
 
 set -eu
 
-# Determine log file — always log, even if claude-rca is missing.
+# Determine log file — always log, even if the RCA CLI is missing.
 LOG_DIR="${HOME}/.claude-rca"
 mkdir -p "${LOG_DIR}" 2>/dev/null || LOG_DIR="${TMPDIR:-/tmp}"
 LOG_FILE="${LOG_DIR}/hook.log"
@@ -17,14 +17,23 @@ log() {
   echo "[${TIMESTAMP}] [${1}] ref=${REF} ${2}" >> "${LOG_FILE}" 2>/dev/null || true
 }
 
-# Bail if claude-rca isn't installed — but LOG the failure.
-if ! command -v claude-rca >/dev/null 2>&1; then
-  log "ERROR" "claude-rca not found on PATH — run 'npm link' in the claude-rca repo"
+RCA_BIN="${RCA_BIN:-}"
+if [ -z "${RCA_BIN}" ]; then
+  if command -v codex-rca >/dev/null 2>&1; then
+    RCA_BIN="codex-rca"
+  else
+    RCA_BIN="claude-rca"
+  fi
+fi
+
+# Bail if the RCA CLI isn't installed — but LOG the failure.
+if ! command -v "${RCA_BIN}" >/dev/null 2>&1; then
+  log "ERROR" "${RCA_BIN} not found on PATH — run 'npm link' in the codex-rca repo"
   exit 0
 fi
 
 # Only run if auto_generate is true.
-if ! claude-rca config --get auto_generate 2>/dev/null | grep -qx true; then
+if ! "${RCA_BIN}" config --get auto_generate 2>/dev/null | grep -qx true; then
   log "INFO" "skipped: auto_generate is not true"
   exit 0
 fi
@@ -34,9 +43,9 @@ case "$MSG" in
     log "INFO" "fix commit detected, starting RCA generation"
     # Run in background so commit returns immediately.
     (
-      GEN_LOG="$(claude-rca config --get log.file 2>/dev/null || echo "${LOG_FILE}")"
-      OUTPUT_DIR="$(claude-rca config --get output_dir 2>/dev/null || echo rca)"
-      if claude-rca generate --from HEAD >>"${GEN_LOG}" 2>&1; then
+      GEN_LOG="$("${RCA_BIN}" config --get log.file 2>/dev/null || echo "${LOG_FILE}")"
+      OUTPUT_DIR="$("${RCA_BIN}" config --get output_dir 2>/dev/null || echo rca)"
+      if "${RCA_BIN}" generate --from HEAD >>"${GEN_LOG}" 2>&1; then
         log "INFO" "RCA generated successfully"
         rm -f "${OUTPUT_DIR}/.last-rca-error"
       else
