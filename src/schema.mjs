@@ -1,5 +1,10 @@
-import Ajv2020 from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
+import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const CONFIG_SCHEMA = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -115,21 +120,43 @@ const CONFIG_SCHEMA = {
   required: ['version'],
 };
 
-const ajv = new Ajv2020({ allErrors: true, useDefaults: true });
-addFormats(ajv);
-const validate = ajv.compile(CONFIG_SCHEMA);
+// Ajv costs ~150ms to import and ~50ms per compile. Every CLI invocation used to
+// pay that at module load, including `version` and the per-commit hook. Defer it
+// to first use and compile each schema at most once.
+let ajvInstance = null;
+function getAjv() {
+  if (!ajvInstance) {
+    const ajvMod = require('ajv/dist/2020.js');
+    const formatsMod = require('ajv-formats');
+    const Ajv2020 = ajvMod.default || ajvMod;
+    const addFormats = formatsMod.default || formatsMod;
+    ajvInstance = new Ajv2020({ allErrors: true, useDefaults: true });
+    addFormats(ajvInstance);
+  }
+  return ajvInstance;
+}
+
+function formatErrors(errors) {
+  return errors.map(
+    (e) =>
+      `${e.instancePath || '/'} ${e.message}${e.params?.allowedValue !== undefined ? ` (expected: ${e.params.allowedValue})` : ''}`,
+  );
+}
+
+let configValidator = null;
+function getConfigValidator() {
+  if (!configValidator) configValidator = getAjv().compile(CONFIG_SCHEMA);
+  return configValidator;
+}
 
 export function validateConfig(data) {
+  const validate = getConfigValidator();
   const copy = JSON.parse(JSON.stringify(data));
   const valid = validate(copy);
   if (valid) {
     return { valid: true, data: copy, errors: [] };
   }
-  const errors = validate.errors.map(
-    (e) =>
-      `${e.instancePath || '/'} ${e.message}${e.params?.allowedValue !== undefined ? ` (expected: ${e.params.allowedValue})` : ''}`,
-  );
-  return { valid: false, data: copy, errors };
+  return { valid: false, data: copy, errors: formatErrors(validate.errors) };
 }
 
 export const VALID_KEYS = new Set();
@@ -146,28 +173,32 @@ function collectKeys(schema, prefix = '') {
 }
 collectKeys(CONFIG_SCHEMA);
 
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const RCA_SCHEMA = JSON.parse(
-  readFileSync(join(__dirname, '..', 'prompts', 'rca-schema.json'), 'utf8'),
-);
-
-const rcaValidate = ajv.compile(RCA_SCHEMA);
+// Only generation validates an RCA, so neither the schema file read nor its
+// compilation belongs on the module-load path.
+let rcaValidator = null;
+function getRcaValidator() {
+  if (!rcaValidator) {
+    const schema = JSON.parse(
+      readFileSync(join(__dirname, '..', 'prompts', 'rca-schema.json'), 'utf8'),
+    );
+    rcaValidator = getAjv().compile(schema);
+  }
+  return rcaValidator;
+}
 
 export function validateRca(data) {
+  // A provider can return a well-formed envelope with no structured output. Treat
+  // that as a schema failure the caller can retry, not a JSON.parse(undefined) throw.
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+    return { valid: false, data: null, errors: [`/ expected an object, got ${typeof data}`] };
+  }
+  const validate = getRcaValidator();
   const copy = JSON.parse(JSON.stringify(data));
-  const valid = rcaValidate(copy);
+  const valid = validate(copy);
   if (valid) {
     return { valid: true, data: copy, errors: [] };
   }
-  const errors = rcaValidate.errors.map(
-    (e) =>
-      `${e.instancePath || '/'} ${e.message}${e.params?.allowedValue !== undefined ? ` (expected: ${e.params.allowedValue})` : ''}`,
-  );
-  return { valid: false, data: copy, errors };
+  return { valid: false, data: copy, errors: formatErrors(validate.errors) };
 }
 
-export { CONFIG_SCHEMA, RCA_SCHEMA };
+export { CONFIG_SCHEMA };

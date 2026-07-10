@@ -23,6 +23,11 @@ const ERROR_TABLE = {
     exit: 25,
     template: 'Token budget exceeded: {reason}.',
   },
+  SECRETS_DETECTED: {
+    category: 'input',
+    exit: 26,
+    template: 'Diff may contain secrets. Re-run with --no-secret-scan to bypass.',
+  },
   RIPGREP_MISSING: {
     category: 'env',
     exit: 30,

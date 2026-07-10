@@ -54,8 +54,26 @@ function inferLanguage(file) {
   return EXT_TO_LANG[ext] || '';
 }
 
+// trimLines() runs afterwards and strips trailing whitespace, so a body line of
+// "--- " would otherwise survive escaping and re-emerge as a bare delimiter.
 function escapeBody(text) {
-  return String(text).replace(/^---$/gm, '\\---');
+  return String(text).replace(/^---[ \t]*$/gm, '\\---');
+}
+
+// YAML plain scalars can inject structure. rca.files entries carry no pattern in
+// the schema, so a model-supplied "evil.js\ntags: [pwned]" would add its own
+// frontmatter keys. Emit plain only when unambiguously safe; otherwise use a
+// double-quoted scalar (JSON string syntax is valid YAML).
+const YAML_PLAIN_SAFE = /^[A-Za-z0-9][A-Za-z0-9 _./@+-]*$/;
+const YAML_RESERVED = /^(true|false|null|yes|no|on|off|~)$/i;
+const YAML_NUMERIC = /^[-+]?[0-9][0-9._]*$/;
+
+function yamlScalar(value) {
+  const s = String(value);
+  if (!YAML_PLAIN_SAFE.test(s) || YAML_RESERVED.test(s) || YAML_NUMERIC.test(s)) {
+    return JSON.stringify(s);
+  }
+  return s;
 }
 
 function trimLines(text) {
@@ -137,24 +155,24 @@ export function renderRca(rca, context) {
     if (key === 'prior_bugs' && Array.isArray(val)) {
       yamlLines.push(`${key}:`);
       for (const item of val) {
-        yamlLines.push(`  - id: ${item.id}`);
+        yamlLines.push(`  - id: ${yamlScalar(item.id)}`);
         yamlLines.push(`    title: ${JSON.stringify(item.title)}`);
         yamlLines.push(`    date: "${item.date}"`);
       }
     } else if (Array.isArray(val)) {
       if (key === 'tags') {
-        yamlLines.push(`${key}: [${val.join(', ')}]`);
+        yamlLines.push(`${key}: [${val.map(yamlScalar).join(', ')}]`);
       } else {
         yamlLines.push(`${key}:`);
         for (const item of val) {
-          yamlLines.push(`  - ${item}`);
+          yamlLines.push(`  - ${yamlScalar(item)}`);
         }
       }
     } else if (key === 'description') {
       // JSON.stringify to handle colons and special characters safely
       yamlLines.push(`${key}: ${JSON.stringify(val)}`);
     } else {
-      yamlLines.push(`${key}: ${val}`);
+      yamlLines.push(`${key}: ${yamlScalar(val)}`);
     }
   }
 

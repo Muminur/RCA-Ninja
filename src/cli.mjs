@@ -380,11 +380,12 @@ export function createProgram() {
         const context = await buildContext({ cwd, ref: opts.from });
 
         progress.update('Scanning for secrets');
-        if (!opts.secretScan && scanForSecrets(context.diff)) {
+        // commander maps --no-secret-scan onto opts.secretScan, which defaults to
+        // true. The old `!opts.secretScan` guard skipped the scan by default and
+        // ran it only when the user asked to bypass it.
+        if (opts.secretScan !== false && scanForSecrets(context.diff)) {
           progress.fail('Secret scan failed');
-          throw new RcaError('INTERNAL', {
-            message: 'Diff may contain secrets. Use --no-secret-scan to bypass.',
-          });
+          throw new RcaError('SECRETS_DETECTED', {});
         }
 
         const defaultSystemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');

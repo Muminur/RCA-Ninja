@@ -2,8 +2,13 @@ import { run } from './exec.mjs';
 
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
 
+// core.quotePath=true (git's default) C-quotes non-ASCII paths, so a file named
+// src/café.mjs is reported as "src/caf\303\251.mjs". Disable it repo-wide.
 async function git(args, cwd) {
-  const { stdout } = await run('git', args, { cwd, env: GIT_ENV });
+  const { stdout } = await run('git', ['-c', 'core.quotePath=false', ...args], {
+    cwd,
+    env: GIT_ENV,
+  });
   return stdout.trim();
 }
 
