@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { slugify } from './slug.mjs';
 import { atomicWrite } from './util/fs.mjs';
 
@@ -18,16 +18,42 @@ export function computeRcaPath({ outputDir, date, shortHash, title, maxSlugWords
 }
 
 export async function writeRca({ outputDir, content, date, shortHash, title, maxSlugWords = 5 }) {
-  let candidate = computeRcaPath({ outputDir, date, shortHash, title, maxSlugWords });
+  const base = computeRcaPath({ outputDir, date, shortHash, title, maxSlugWords });
+  mkdirSync(dirname(base), { recursive: true });
+
+  // Derive every collision candidate from the original stem. Stripping a trailing
+  // -\d+ off the previous candidate instead would eat a slug that legitimately
+  // ends in a number: "...-crash-module-42.md" became "...-crash-module-2.md".
+  const stem = base.slice(0, -'.md'.length);
+
+  // Reserve the name with O_EXCL rather than checking existsSync() first: two
+  // concurrent generate runs (the post-commit hook backgrounds one) could both
+  // pass the check and then have the second rename silently clobber the first.
+  let candidate = base;
   let suffix = 1;
-
-  while (existsSync(candidate)) {
-    suffix++;
-    const base = candidate.replace(/(-\d+)?\.md$/, '');
-    candidate = `${base}-${suffix}.md`;
+  let fd;
+  for (;;) {
+    try {
+      fd = openSync(candidate, 'wx');
+      break;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      suffix += 1;
+      candidate = `${stem}-${suffix}.md`;
+    }
   }
+  closeSync(fd);
 
-  await atomicWrite(candidate, content);
+  try {
+    await atomicWrite(candidate, content);
+  } catch (err) {
+    try {
+      unlinkSync(candidate);
+    } catch {
+      /* leave the reservation behind rather than mask the real error */
+    }
+    throw err;
+  }
 
   return { path: candidate };
 }

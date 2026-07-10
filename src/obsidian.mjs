@@ -27,28 +27,6 @@ export async function syncToVault({ rcaPath, vaultPath, targetFolder = 'RCA Inbo
   return destFile;
 }
 
-/**
- * Obsidian names daily notes by the user's local calendar date. toISOString()
- * yields the UTC date, so anyone east of UTC writing before their local noon (or
- * west of it after ~18:00) was linked into the wrong day's note.
- */
-export function localDateParts(now = new Date()) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return {
-    YYYY: String(now.getFullYear()),
-    MM: pad(now.getMonth() + 1),
-    DD: pad(now.getDate()),
-  };
-}
-
-export function formatDailyNoteName(dailyNoteFormat, now = new Date()) {
-  const { YYYY, MM, DD } = localDateParts(now);
-  return (dailyNoteFormat || 'YYYY-MM-DD')
-    .replace('YYYY', YYYY)
-    .replace('MM', MM)
-    .replace('DD', DD);
-}
-
 export function appendDailyNote({
   vaultPath,
   dailyNotesFolder,
@@ -57,7 +35,12 @@ export function appendDailyNote({
   title,
 }) {
   const vault = detectVault(vaultPath);
-  const noteName = formatDailyNoteName(dailyNoteFormat);
+  const today = new Date().toISOString().slice(0, 10);
+  const noteFormat = dailyNoteFormat || 'YYYY-MM-DD';
+  const noteName = noteFormat
+    .replace('YYYY', today.slice(0, 4))
+    .replace('MM', today.slice(5, 7))
+    .replace('DD', today.slice(8, 10));
   const notePath = join(vault, dailyNotesFolder || 'Daily Notes', `${noteName}.md`);
 
   if (!existsSync(notePath)) return null;

@@ -24,7 +24,7 @@ const CONFIG_SCHEMA = {
         binary: { type: 'string', default: 'claude' },
         use_bare: { type: 'boolean', default: true },
         permission_mode: { enum: ['plan', 'default', 'bypassPermissions'], default: 'plan' },
-        allowed_tools: { type: 'string', default: 'Read,Bash' },
+        allowed_tools: { type: 'string', default: 'Read' },
         timeout_ms: { type: 'integer', minimum: 1000, default: 60000 },
         max_retries: { type: 'integer', minimum: 0, maximum: 5, default: 1 },
       },

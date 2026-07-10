@@ -32,7 +32,7 @@ export function createObsidianClient({
   function apiRequest(
     method,
     path,
-    { body, contentType = 'text/markdown', query, headers: extraHeaders, timeoutMs = 15000 } = {},
+    { body, contentType = 'text/markdown', query, headers: extraHeaders } = {},
   ) {
     return new Promise((resolve, reject) => {
       const queryString = query
@@ -81,12 +81,6 @@ export function createObsidianClient({
             resolve(raw);
           }
         });
-      });
-
-      // req.on('error') only fires on connection failures. A peer that accepts the
-      // socket and never replies would otherwise hang the CLI and MCP tool forever.
-      req.setTimeout(timeoutMs, () => {
-        req.destroy(new Error(`no response within ${timeoutMs}ms`));
       });
 
       req.on('error', (err) => {

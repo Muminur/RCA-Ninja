@@ -1,8 +1,32 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { validateConfig, VALID_KEYS } from './schema.mjs';
 import { RcaError } from './errors.mjs';
+
+/**
+ * Find .claude-rca.json by walking up from `startDir`, stopping at the git repo
+ * root. Looking only in cwd meant `cd pkg/app && claude-rca generate` silently
+ * ran with defaults: the wrong binary, and RCAs written to pkg/app/rca.
+ *
+ * Returns the directory the config lives in as `root`, so relative paths such as
+ * output_dir resolve against the project rather than the caller's cwd.
+ */
+export function findProjectConfig(startDir) {
+  const start = resolve(startDir);
+  let dir = start;
+  for (;;) {
+    const candidate = join(dir, '.claude-rca.json');
+    if (existsSync(candidate)) return { path: candidate, root: dir };
+    // Check for the config before deciding this is the repo root, so a config
+    // sitting at the root is still found.
+    if (existsSync(join(dir, '.git'))) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return { path: null, root: start };
+}
 
 function loadDotenv(dir) {
   const envPath = join(dir, '.env');
@@ -27,14 +51,14 @@ function loadDotenv(dir) {
 export const DEFAULTS = {
   version: 1,
   output_dir: './rca',
-  claude: { use_bare: false, permission_mode: 'plan', allowed_tools: 'Read,Bash' },
+  claude: { use_bare: false, permission_mode: 'plan', allowed_tools: 'Read' },
   obsidian: { enabled: false },
 };
 
 const INIT_CONFIG = {
   version: 1,
   output_dir: './rca',
-  claude: { use_bare: false, permission_mode: 'plan', allowed_tools: 'Read,Bash' },
+  claude: { use_bare: false, permission_mode: 'plan', allowed_tools: 'Read' },
   obsidian: { enabled: false },
 };
 
@@ -67,7 +91,10 @@ function tryLoadJson(path) {
 }
 
 export function loadConfig({ cwd = process.cwd(), configPath = null } = {}) {
-  loadDotenv(cwd);
+  const project = findProjectConfig(cwd);
+
+  // .env lives beside the project config, so it is found from subdirectories too.
+  loadDotenv(project.root);
 
   const sources = [];
 
@@ -77,7 +104,7 @@ export function loadConfig({ cwd = process.cwd(), configPath = null } = {}) {
   const xdgConfig = tryLoadJson(join(xdgHome, 'claude-rca', 'config.json'));
   if (xdgConfig) sources.push(xdgConfig);
 
-  const projectConfig = tryLoadJson(join(cwd, '.claude-rca.json'));
+  const projectConfig = project.path ? tryLoadJson(project.path) : null;
   if (projectConfig) sources.push(projectConfig);
 
   const envPath = process.env.CLAUDE_RCA_CONFIG;
@@ -96,10 +123,17 @@ export function loadConfig({ cwd = process.cwd(), configPath = null } = {}) {
     merged = deepMerge(merged, source);
   }
 
-  const { data } = validateConfig(merged);
+  const { valid, data, errors } = validateConfig(merged);
+  if (!valid) {
+    // Previously the invalid data was used anyway, so `"timeout_ms": "60s"` reached
+    // setTimeout() as a string and aborted every provider call almost immediately.
+    throw new RcaError('INVALID_CONFIG', { errors: errors.slice(0, 3).join('; ') });
+  }
 
+  // Relative paths belong to the project, not to wherever the user happened to
+  // stand. Falls back to cwd when no project config was found.
   if (data.output_dir) {
-    data.output_dir = resolve(cwd, data.output_dir);
+    data.output_dir = resolve(project.root, data.output_dir);
   }
 
   if (process.env.OBSIDIAN_API_KEY) {
