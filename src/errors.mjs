@@ -28,7 +28,14 @@ const ERROR_TABLE = {
     exit: 30,
     template: 'ripgrep (rg) is not on PATH. Install: {hint}.',
   },
+  SEARCH_FAILED: { category: 'input', exit: 31, template: 'Search failed: {reason}.' },
   NOT_FOUND: { category: 'input', exit: 40, template: 'RCA not found: {id}.' },
+  FORBIDDEN_PATH: {
+    category: 'input',
+    exit: 41,
+    template: 'Path {path} escapes the RCA output directory.',
+  },
+  INVALID_CONFIG: { category: 'input', exit: 50, template: 'Invalid configuration: {errors}.' },
   INVALID_CONFIG_KEY: { category: 'input', exit: 50, template: 'Unknown config key: {key}.' },
   INVALID_CONFIG_VALUE: {
     category: 'input',
