@@ -122,6 +122,15 @@ codex-rca doctor   # verifies the configured provider's binary is installed
 
 If both providers are configured, generation automatically **falls back** to the other when the primary fails (e.g. Claude → Codex). Search, recent/show/trends, hooks, and MCP work identically regardless of provider.
 
+## Security & Configuration
+
+- **Secrets live in `.env`, not config.** Put `OBSIDIAN_API_KEY` in a gitignored `.env` beside your `.claude-rca.json`; it is loaded automatically. `config --set obsidian.api_key` is refused, and a plain `config` dump redacts the key.
+- **Secret scanning runs by default.** The diff is scanned for `api_key`/`secret`/`password`/`token` patterns before it is sent to the provider; generation aborts if any are found. Bypass with `generate --no-secret-scan`.
+- **Read-only generation.** The provider is invoked with `allowed_tools: "Read"` (the RCA prompt needs nothing more) and `permission_mode: plan`.
+- **Search is injection-safe.** The search query is bound as a ripgrep pattern with `-e … --`, so a query starting with `-` can never be interpreted as a ripgrep option (notably `--pre`, which would execute a program).
+- **MCP paths are contained.** `rca_show` and `rca_sync_to_vault` confine caller-supplied paths to `output_dir`, since MCP arguments come from a model. The equivalent CLI commands stay unrestricted.
+- **Config is discovered upward.** Running from a subdirectory finds the project's `.claude-rca.json` by walking up to the git repo root, and resolves `output_dir` against the project root. Invalid config fails fast rather than being silently used.
+
 ## RCA Output
 
 Generated RCA documents are stored as Markdown:
