@@ -170,7 +170,18 @@ export function setConfigValue(configPath, keyPath, rawValue) {
     throw new RcaError('INVALID_CONFIG_KEY', { key: keyPath });
   }
 
-  const data = JSON.parse(readFileSync(configPath, 'utf8'));
+  // .claude-rca.json is committed. Secrets belong in .env, which is gitignored and
+  // which loadConfig() already reads into obsidian.api_key.
+  if (keyPath === 'obsidian.api_key') {
+    throw new RcaError('INVALID_CONFIG_VALUE', {
+      key: keyPath,
+      reason: 'refusing to write a secret into a tracked config file. Put OBSIDIAN_API_KEY in .env',
+    });
+  }
+
+  const data = existsSync(configPath)
+    ? JSON.parse(readFileSync(configPath, 'utf8'))
+    : { version: 1 };
   const parts = keyPath.split('.');
   const lastKey = parts.pop();
   let obj = data;

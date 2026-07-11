@@ -5,7 +5,13 @@ import { createRequire } from 'node:module';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
-import { initProject, loadConfig, getConfigValue, setConfigValue } from './config.mjs';
+import {
+  initProject,
+  loadConfig,
+  getConfigValue,
+  setConfigValue,
+  findProjectConfig,
+} from './config.mjs';
 import { RcaError } from './errors.mjs';
 import { buildContext } from './context.mjs';
 import { generate, scanForSecrets } from './generator.mjs';
@@ -729,11 +735,21 @@ export function createProgram() {
           }
           const key = opts.set.slice(0, eqIdx);
           const value = opts.set.slice(eqIdx + 1);
-          const projectPath = join(cwd, '.claude-rca.json');
-          setConfigValue(projectPath, key, value);
+          // Write back to whichever file --config selected; otherwise update the
+          // project's config wherever it lives, not a fresh one in cwd.
+          const project = findProjectConfig(cwd);
+          const targetPath = configPath
+            ? resolvePath(cwd, configPath)
+            : project.path || join(project.root, '.claude-rca.json');
+          setConfigValue(targetPath, key, value);
           process.stderr.write(`✓ set ${key}\n`);
         } else {
-          process.stdout.write(JSON.stringify(cfg, null, 2) + '\n');
+          // Never print an api_key that loadConfig() merged in from the environment.
+          const safe =
+            cfg.obsidian?.api_key != null
+              ? { ...cfg, obsidian: { ...cfg.obsidian, api_key: '***redacted***' } }
+              : cfg;
+          process.stdout.write(JSON.stringify(safe, null, 2) + '\n');
         }
       } catch (err) {
         if (err instanceof RcaError) {
