@@ -2,10 +2,12 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, relative, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.mjs';
+import { RcaError } from './errors.mjs';
 import { buildContext } from './context.mjs';
+import { formatDailyNoteName } from './obsidian.mjs';
 import { generate, scanForSecrets } from './generator.mjs';
 import { renderRca } from './renderer.mjs';
 import { writeRca } from './writer.mjs';
@@ -235,7 +237,21 @@ function getObsidianClient(cfg) {
   });
 }
 
-async function handleTool(name, args, cfg) {
+/**
+ * MCP tool arguments come from a model, not a shell user, so a caller-supplied
+ * path is a trust boundary the CLI does not have. Confine it to the RCA corpus.
+ */
+function assertWithin(baseDir, candidate) {
+  const base = resolve(baseDir);
+  const target = resolve(base, candidate);
+  const rel = relative(base, target);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new RcaError('FORBIDDEN_PATH', { path: candidate });
+  }
+  return target;
+}
+
+export async function handleTool(name, args, cfg) {
   const cwd = args.cwd || process.cwd();
 
   switch (name) {
@@ -312,7 +328,10 @@ async function handleTool(name, args, cfg) {
     }
 
     case 'rca_show': {
-      const content = show({ outputDir: cfg.output_dir, id: args.id });
+      // show() resolves a path-ish id against process.cwd() before falling back to
+      // the corpus lookup, so a bare ".env" would be read straight out of the
+      // server's working directory. Contain the read itself.
+      const content = show({ outputDir: cfg.output_dir, id: args.id, restrictToOutputDir: true });
       return { content: [{ type: 'text', text: content }] };
     }
 
@@ -436,17 +455,19 @@ async function handleTool(name, args, cfg) {
 
     case 'rca_sync_to_vault': {
       const client = getObsidianClient(cfg);
+      // Without this, a caller could copy any readable file on the machine into a
+      // vault that may sync to the cloud.
+      const rcaPath = assertWithin(cfg.output_dir, args.rca_path);
       if (client) {
-        const content = readFileSync(args.rca_path, 'utf8');
-        const { basename } = await import('node:path');
+        const content = readFileSync(rcaPath, 'utf8');
         const targetFolder = cfg.obsidian.target_folder || 'RCA Inbox';
-        const notePath = `${targetFolder}/${basename(args.rca_path)}`;
+        const notePath = `${targetFolder}/${basename(rcaPath)}`;
         await client.createNote(notePath, content);
         return { content: [{ type: 'text', text: `Synced via REST API: ${notePath}` }] };
       }
       if (cfg.obsidian?.vault_path) {
         const destFile = await syncToVault({
-          rcaPath: args.rca_path,
+          rcaPath,
           vaultPath: cfg.obsidian.vault_path,
           targetFolder: cfg.obsidian.target_folder || 'RCA Inbox',
         });
@@ -467,11 +488,8 @@ async function handleTool(name, args, cfg) {
       const client = getObsidianClient(cfg);
       const dailyNotesFolder = cfg.obsidian?.daily_notes_folder || 'Daily Notes';
       const format = cfg.obsidian?.daily_note_format || 'YYYY-MM-DD';
-      const today = new Date().toISOString().slice(0, 10);
-      const noteName = format
-        .replace('YYYY', today.slice(0, 4))
-        .replace('MM', today.slice(5, 7))
-        .replace('DD', today.slice(8, 10));
+      // Local calendar date, not the UTC date. See formatDailyNoteName().
+      const noteName = formatDailyNoteName(format);
       const linkName = args.rca_basename.replace(/\.md$/, '');
       const bullet = `\n- [[${linkName}]] — ${args.title}\n`;
 

@@ -12,6 +12,15 @@ import {
 import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createProgram } from '../../src/cli.mjs';
+import { localDateParts } from '../../src/obsidian.mjs';
+
+// appendDailyNote targets the user's LOCAL calendar date; deriving the expected
+// filename with toISOString() (UTC) would mismatch it before local noon east of
+// UTC. See the daily-note fix in src/obsidian.mjs.
+function localToday() {
+  const { YYYY, MM, DD } = localDateParts();
+  return `${YYYY}-${MM}-${DD}`;
+}
 
 function createFixtureDir() {
   const tmp = mkdtempSync(join(tmpdir(), 'claude-rca-cli-sub-'));
@@ -186,7 +195,7 @@ describe('obsidian sync subcommand', () => {
 
   it('appends a wikilink to daily note if it exists', async () => {
     const { tmp, vault, rcaName } = createObsidianFixture();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localToday();
     const dailyNotePath = join(vault, 'Daily Notes', `${today}.md`);
     writeFileSync(dailyNotePath, '# Daily Note\n\n- something\n');
 

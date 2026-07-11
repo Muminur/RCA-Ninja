@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
-import { join, resolve, basename } from 'node:path';
+import { join, resolve, basename, relative, isAbsolute } from 'node:path';
 import { run } from './util/exec.mjs';
 import { RcaError } from './errors.mjs';
 import { loadManifest } from './manifest.mjs';
@@ -11,11 +11,34 @@ function rgInstallHint() {
   return 'See https://github.com/BurntSushi/ripgrep#installation';
 }
 
-async function checkRg() {
+function isMissingRg(err) {
+  return err?.code === 'ENOENT' || err?.spawnError?.code === 'ENOENT';
+}
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Run ripgrep, distinguishing its exit codes: 0 = matches, 1 = no matches,
+ * 2 = error. Collapsing 1 and 2 into "no results" hid every bad-pattern error.
+ * A missing binary is detected from the spawn error, so no extra `rg --version`
+ * probe process is needed per search.
+ */
+async function rg(args) {
   try {
-    await run('rg', ['--version'], { timeoutMs: 5000 });
-  } catch {
-    throw new RcaError('RIPGREP_MISSING', { hint: rgInstallHint() });
+    const { stdout } = await run('rg', args, { timeoutMs: 30000 });
+    return stdout;
+  } catch (err) {
+    if (isMissingRg(err)) {
+      throw new RcaError('RIPGREP_MISSING', { hint: rgInstallHint() });
+    }
+    if (err.childCode === 1) return '';
+    if (err.childCode === 2) {
+      const reason = (err.stderr || '').split('\n').find(Boolean) || 'ripgrep exited 2';
+      throw new RcaError('SEARCH_FAILED', { reason });
+    }
+    throw err;
   }
 }
 
@@ -96,34 +119,65 @@ export async function search({ outputDir, query, tag, since, files, json }) {
   }
 
   // Full-text ripgrep mode.
-  await checkRg();
+  // rg exits 2 on a missing path; an un-initialised corpus is "no results".
+  if (!existsSync(outputDir)) return [];
 
-  let rgFiles = null;
-  if (tag) {
-    try {
-      const { stdout } = await run('rg', ['-l', `tags:.*\\b${tag}\\b`, outputDir], {
-        timeoutMs: 10000,
-      });
-      rgFiles = stdout.trim().split('\n').filter(Boolean);
-      if (rgFiles.length === 0) return [];
-    } catch {
-      return [];
+  let sinceDate = null;
+  if (since) {
+    sinceDate = new Date(since);
+    if (Number.isNaN(sinceDate.getTime())) {
+      throw new RcaError('SEARCH_FAILED', { reason: `unparseable --since value "${since}"` });
     }
   }
 
-  const rgArgs = ['--line-number', '--no-heading', query];
+  let rgFiles = null;
+  if (tag) {
+    // Anchor to the frontmatter line and delimit the tag by a bracket, comma or
+    // space. A bare \b boundary treats '-' as a break, so --tag race also matched
+    // notes tagged only race-condition; and an unescaped tag like "c++" threw.
+    const pattern = `^tags:.*[\\[ ,]${escapeRegex(tag)}[,\\] ]`;
+    const stdout = await rg(['-l', '-e', pattern, '--', outputDir]);
+    rgFiles = stdout.trim().split('\n').filter(Boolean);
+    if (rgFiles.length === 0) return [];
+  }
+
+  // --with-filename because rg omits the path prefix when handed a single file
+  // (which happens when --tag narrows to one RCA), breaking the parse below.
+  //
+  // -e binds the query as a pattern and -- ends option parsing. Passing the query
+  // positionally let a query like "--pre=/bin/sh" reach ripgrep as an option,
+  // which is remote code execution via the MCP rca_search tool.
+  const rgArgs = [
+    '--with-filename',
+    '--line-number',
+    '--no-heading',
+    '--smart-case',
+    '-e',
+    query,
+    '--',
+  ];
   if (rgFiles) {
     for (const f of rgFiles) rgArgs.push(f);
   } else {
     rgArgs.push(outputDir);
   }
 
-  let stdout;
-  try {
-    const result = await run('rg', rgArgs, { timeoutMs: 30000 });
-    stdout = result.stdout;
-  } catch {
-    return [];
+  const stdout = await rg(rgArgs);
+  if (!stdout.trim()) return [];
+
+  // mtime is only consumed by --since and --json, and rg emits one line per
+  // match, so stat per line stat'ed the same file repeatedly.
+  const needMtime = Boolean(since || json);
+  const mtimeCache = new Map();
+  function mtimeOf(path) {
+    if (!mtimeCache.has(path)) {
+      try {
+        mtimeCache.set(path, statSync(path).mtime.toISOString());
+      } catch {
+        mtimeCache.set(path, null);
+      }
+    }
+    return mtimeCache.get(path);
   }
 
   let results = stdout
@@ -134,18 +188,16 @@ export async function search({ outputDir, query, tag, since, files, json }) {
       const match = line.match(/^(.+?):(\d+):(.*)$/);
       if (!match) return null;
       const [, path, lineNum, text] = match;
-      let mtime = null;
-      try {
-        mtime = statSync(path).mtime.toISOString();
-      } catch {
-        /* file may not exist */
-      }
-      return { path, line: parseInt(lineNum, 10), text: text.trim(), mtime };
+      return {
+        path,
+        line: parseInt(lineNum, 10),
+        text: text.trim(),
+        mtime: needMtime ? mtimeOf(path) : null,
+      };
     })
     .filter(Boolean);
 
-  if (since) {
-    const sinceDate = new Date(since);
+  if (sinceDate) {
     results = results.filter((r) => r.mtime && new Date(r.mtime) >= sinceDate);
   }
 
@@ -209,16 +261,31 @@ function collectMdFiles(dir, acc) {
   }
 }
 
-export function show({ outputDir, id }) {
-  if (existsSync(id)) {
-    return readFileSync(id, 'utf8');
+/**
+ * `id` may be a path, a basename, or a short hash.
+ *
+ * restrictToOutputDir confines the path branches to the RCA corpus. The CLI leaves
+ * it off: a shell user reading an arbitrary file via `show` gains nothing they did
+ * not already have. The MCP server turns it on, because there `id` comes from a
+ * model. Note that a bare name like ".env" resolves against process.cwd(), so it
+ * must be contained too — not just absolute paths and "..".
+ */
+export function show({ outputDir, id, restrictToOutputDir = false }) {
+  const base = resolve(outputDir);
+  const target = resolve(id);
+  const rel = relative(base, target);
+  const insideCorpus = rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+
+  if (!restrictToOutputDir || insideCorpus) {
+    if (existsSync(id)) {
+      return readFileSync(id, 'utf8');
+    }
+    if (existsSync(target)) {
+      return readFileSync(target, 'utf8');
+    }
   }
 
-  const resolved = resolve(id);
-  if (existsSync(resolved)) {
-    return readFileSync(resolved, 'utf8');
-  }
-
+  // These lookups only ever match inside outputDir, so they need no containment.
   const allFiles = [];
   collectMdFiles(outputDir, allFiles);
 

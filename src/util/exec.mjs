@@ -51,6 +51,9 @@ export function run(cmd, args = [], { cwd, timeoutMs = 30000, env, input } = {})
         });
         err.exitCode = code;
         err.code = code;
+        // childCode is the raw process exit status, kept separate so callers can
+        // distinguish e.g. ripgrep's "no match" (1) from "bad pattern" (2).
+        err.childCode = code;
         err.stdout = stdout;
         err.stderr = stderr;
         reject(err);

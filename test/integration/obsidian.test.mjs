@@ -13,7 +13,16 @@ import {
   appendDailyNote,
   buildObsidianUri,
   resolveTargetFolder,
+  formatDailyNoteName,
+  localDateParts,
 } from '../../src/obsidian.mjs';
+
+// The daily note is named for the user's LOCAL calendar date. Deriving it here
+// with toISOString() would just mirror the bug this pins against.
+function localToday() {
+  const { YYYY, MM, DD } = localDateParts();
+  return `${YYYY}-${MM}-${DD}`;
+}
 
 function createVault(tmp) {
   const vault = join(tmp, 'my-vault');
@@ -64,11 +73,28 @@ describe('obsidian', () => {
     assert.strictEqual(readFileSync(dest, 'utf8'), readFileSync(rca, 'utf8'));
   });
 
+  it('daily note name uses the local calendar date, not the UTC date', () => {
+    // Pick an instant whose local date differs from its UTC date in this timezone.
+    const candidates = [
+      new Date(2026, 6, 10, 0, 1, 0), // local 2026-07-10 00:01
+      new Date(2026, 6, 10, 23, 59, 0), // local 2026-07-10 23:59
+    ];
+    const differing = candidates.find((d) => d.toISOString().slice(0, 10) !== '2026-07-10');
+    if (!differing) return; // only in UTC itself, where the bug is unobservable
+
+    assert.strictEqual(formatDailyNoteName('YYYY-MM-DD', differing), '2026-07-10');
+    assert.notStrictEqual(
+      formatDailyNoteName('YYYY-MM-DD', differing),
+      differing.toISOString().slice(0, 10),
+      'must not equal the UTC date for this instant',
+    );
+  });
+
   it('appends to daily note if it exists', () => {
     const vault = createVault(tmp);
     const dailyDir = join(vault, 'Daily Notes');
     mkdirSync(dailyDir, { recursive: true });
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localToday();
     const dailyPath = join(dailyDir, `${today}.md`);
     writeFileSync(dailyPath, '# Today\n\n- Did some stuff\n');
 
@@ -103,7 +129,7 @@ describe('obsidian', () => {
     const vault = createVault(tmp);
     const dailyDir = join(vault, 'Daily Notes');
     mkdirSync(dailyDir, { recursive: true });
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localToday();
     const dailyPath = join(dailyDir, `${today}.md`);
     writeFileSync(dailyPath, '# Today\n');
 

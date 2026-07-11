@@ -1,6 +1,10 @@
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createProgram } from '../../src/cli.mjs';
+import { handleTool } from '../../src/mcp-server.mjs';
 
 const EXIT_SENTINEL = Symbol('mock-exit');
 
@@ -182,5 +186,74 @@ describe('new core tools — schema validation', () => {
       !tool.inputSchema.required || !tool.inputSchema.required.includes('query'),
       'rca_search query must not be required',
     );
+  });
+});
+
+// MCP tool arguments come from a model, so any caller-supplied path is a trust
+// boundary. These pin that rca_show and rca_sync_to_vault cannot escape output_dir.
+describe('mcp-server path containment', () => {
+  const SECRET = 'super-secret-value-12345';
+  let tmp, rcaDir, rcaName, origCwd;
+
+  before(() => {
+    origCwd = process.cwd();
+    tmp = mkdtempSync(join(tmpdir(), 'claude-rca-mcp-'));
+    rcaDir = join(tmp, 'rca');
+    mkdirSync(join(rcaDir, '2026', '07'), { recursive: true });
+    rcaName = 'RCA-2026-07-10-abc1234-test-rca.md';
+    writeFileSync(join(rcaDir, '2026', '07', rcaName), '---\ntitle: ok\n---\n\n## Symptom\n\nx\n');
+    writeFileSync(join(tmp, '.env'), `OBSIDIAN_API_KEY=${SECRET}\n`);
+    process.chdir(tmp);
+  });
+
+  after(() => {
+    process.chdir(origCwd);
+  });
+
+  const cfg = () => ({ output_dir: rcaDir, obsidian: {} });
+
+  it('rca_show refuses a bare cwd-relative filename such as .env', async () => {
+    await assert.rejects(
+      () => handleTool('rca_show', { id: '.env' }, cfg()),
+      (err) => err.code === 'NOT_FOUND' || err.code === 'FORBIDDEN_PATH',
+      'rca_show must not read .env from the working directory',
+    );
+  });
+
+  it('rca_show refuses a parent-directory traversal', async () => {
+    await assert.rejects(
+      () => handleTool('rca_show', { id: '../../../../etc/passwd' }, cfg()),
+      (err) => err.code === 'NOT_FOUND' || err.code === 'FORBIDDEN_PATH',
+    );
+  });
+
+  it('rca_show still resolves a legitimate RCA by basename', async () => {
+    const res = await handleTool('rca_show', { id: rcaName }, cfg());
+    assert.ok(res.content[0].text.includes('## Symptom'));
+  });
+
+  it('rca_show still resolves a legitimate RCA by short hash', async () => {
+    const res = await handleTool('rca_show', { id: 'abc1234' }, cfg());
+    assert.ok(res.content[0].text.includes('## Symptom'));
+  });
+
+  it('rca_sync_to_vault refuses a path outside output_dir', async () => {
+    await assert.rejects(
+      () => handleTool('rca_sync_to_vault', { rca_path: join(tmp, '.env') }, cfg()),
+      (err) => err.code === 'FORBIDDEN_PATH',
+    );
+  });
+
+  it('no containment failure ever returns the secret', async () => {
+    for (const id of ['.env', './.env', '../rca/../.env']) {
+      let text;
+      try {
+        const res = await handleTool('rca_show', { id }, cfg());
+        text = res.content[0].text;
+      } catch {
+        continue;
+      }
+      assert.ok(!text.includes(SECRET), `rca_show(${JSON.stringify(id)}) leaked the secret`);
+    }
   });
 });

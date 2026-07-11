@@ -2,6 +2,21 @@ import { request } from 'node:https';
 import { request as httpRequest } from 'node:http';
 import { RcaError } from './errors.mjs';
 
+/**
+ * Percent-encode each path segment but keep the separators. encodeURIComponent()
+ * on the whole path turned "RCA Inbox/note.md" into "RCA%20Inbox%2Fnote.md", which
+ * the API reads as one flat filename, and turned the root "/" into "%2F". A
+ * leading "/" is redundant (paths are vault-relative) and would yield "/vault//".
+ */
+function encodeVaultPath(path) {
+  const relative = String(path).replace(/^\/+/, '');
+  if (relative === '') return '';
+  return relative
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
 export function createObsidianClient({
   apiKey,
   host = '127.0.0.1',
@@ -14,7 +29,11 @@ export function createObsidianClient({
 
   const requester = protocol === 'https' ? request : httpRequest;
 
-  function apiRequest(method, path, { body, contentType = 'text/markdown', query } = {}) {
+  function apiRequest(
+    method,
+    path,
+    { body, contentType = 'text/markdown', query, headers: extraHeaders } = {},
+  ) {
     return new Promise((resolve, reject) => {
       const queryString = query
         ? '?' +
@@ -31,6 +50,7 @@ export function createObsidianClient({
         headers: {
           Authorization: `Bearer ${apiKey}`,
           Accept: 'application/json',
+          ...extraHeaders,
         },
         rejectUnauthorized: false,
       };
@@ -84,43 +104,45 @@ export function createObsidianClient({
     },
 
     async readNote(path) {
-      return apiRequest('GET', `/vault/${encodeURIComponent(path)}`);
+      return apiRequest('GET', `/vault/${encodeVaultPath(path)}`);
     },
 
     async createNote(path, content) {
-      return apiRequest('PUT', `/vault/${encodeURIComponent(path)}`, {
+      return apiRequest('PUT', `/vault/${encodeVaultPath(path)}`, {
         body: content,
         contentType: 'text/markdown',
       });
     },
 
     async patchNote(path, content, { heading, prepend = false } = {}) {
-      const headers = {};
+      // These headers were built and then discarded: apiRequest had no headers
+      // parameter, so the API rejected every PATCH with 400 MissingOperation.
+      const headers = { Operation: prepend ? 'prepend' : 'append' };
       if (heading) {
         headers['Target-Type'] = 'heading';
         headers['Target'] = heading;
       }
-      headers.Operation = prepend ? 'prepend' : 'append';
 
-      return apiRequest('PATCH', `/vault/${encodeURIComponent(path)}`, {
+      return apiRequest('PATCH', `/vault/${encodeVaultPath(path)}`, {
         body: content,
         contentType: 'text/markdown',
+        headers,
       });
     },
 
     async appendNote(path, content) {
-      return apiRequest('POST', `/vault/${encodeURIComponent(path)}`, {
+      return apiRequest('POST', `/vault/${encodeVaultPath(path)}`, {
         body: content,
         contentType: 'text/markdown',
       });
     },
 
     async deleteNote(path) {
-      return apiRequest('DELETE', `/vault/${encodeURIComponent(path)}`);
+      return apiRequest('DELETE', `/vault/${encodeVaultPath(path)}`);
     },
 
     async listFolder(folderPath = '/') {
-      return apiRequest('GET', `/vault/${encodeURIComponent(folderPath)}`);
+      return apiRequest('GET', `/vault/${encodeVaultPath(folderPath)}`);
     },
 
     async listVaultRoot() {
@@ -132,7 +154,7 @@ export function createObsidianClient({
     },
 
     async openNote(path) {
-      return apiRequest('POST', `/open/${encodeURIComponent(path)}`);
+      return apiRequest('POST', `/open/${encodeVaultPath(path)}`);
     },
   };
 }
