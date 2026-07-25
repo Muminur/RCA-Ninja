@@ -5,7 +5,14 @@ import { createRequire } from 'node:module';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
-import { initProject, loadConfig, getConfigValue, setConfigValue } from './config.mjs';
+import {
+  initProject,
+  loadConfig,
+  getConfigValue,
+  setConfigValue,
+  findProjectConfig,
+  PROJECT_CONFIG_NAME,
+} from './config.mjs';
 import { RcaError } from './errors.mjs';
 import { buildContext } from './context.mjs';
 import { generate, scanForSecrets } from './generator.mjs';
@@ -90,9 +97,7 @@ export function createProgram() {
               }
             }
             if (result.status !== 0 && !out) {
-              process.stderr.write(
-                `⚠ git hooks not installed (not a git repo?)\n`,
-              );
+              process.stderr.write(`⚠ git hooks not installed (not a git repo?)\n`);
             }
           } catch {
             process.stderr.write(`⚠ git hooks not installed (installer failed)\n`);
@@ -695,14 +700,30 @@ export function createProgram() {
     .option('--get <key>', 'Get a config value')
     .option('--set <key=value>', 'Set a config value')
     .option('--list', 'List all config values')
+    .option('--path', 'Print the resolved config file path; exit 1 if none was found')
     .action((opts) => {
       try {
         const cwd = program.opts().cwd || process.cwd();
         const configPath = program.opts().config;
         const cfg = loadConfig({ cwd, configPath });
 
-        if (opts.get) {
+        if (opts.path) {
+          // Lets callers (the post-commit hook, doctor) distinguish
+          // "no config found here" from "auto_generate is deliberately off".
+          const resolved = configPath || findProjectConfig(cwd);
+          if (!resolved) {
+            process.stderr.write(`config: no ${PROJECT_CONFIG_NAME} found for ${cwd}\n`);
+            process.exit(1);
+          }
+          process.stdout.write(resolved + '\n');
+        } else if (opts.get) {
           const val = getConfigValue(cfg, opts.get);
+          // An unset key must not print the literal "undefined": callers do
+          // `LOG=$(config --get log.file)` and would write to a file by that name.
+          if (val === undefined) {
+            process.stderr.write(`config: ${opts.get} is not set\n`);
+            process.exit(1);
+          }
           process.stdout.write(
             (typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val)) + '\n',
           );
@@ -714,7 +735,9 @@ export function createProgram() {
           }
           const key = opts.set.slice(0, eqIdx);
           const value = opts.set.slice(eqIdx + 1);
-          const projectPath = join(cwd, '.claude-rca.json');
+          // Edit the config that loadConfig actually reads — from a linked
+          // worktree that is the main checkout's file, not a stray new copy.
+          const projectPath = findProjectConfig(cwd) || join(cwd, '.claude-rca.json');
           setConfigValue(projectPath, key, value);
           process.stderr.write(`✓ set ${key}\n`);
         } else {

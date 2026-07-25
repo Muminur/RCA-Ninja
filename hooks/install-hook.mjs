@@ -47,9 +47,7 @@ function installOne(name, hookDir) {
 
     // Existing non-claude-rca hook — chain instead of refusing
     const chainLine =
-      process.platform === 'win32'
-        ? `\nbash "${src}" "$@" || true\n`
-        : `\n"${src}" "$@" || true\n`;
+      process.platform === 'win32' ? `\nbash "${src}" "$@" || true\n` : `\n"${src}" "$@" || true\n`;
 
     if (!existing.includes(src)) {
       writeFileSync(dest, existing.trimEnd() + '\n' + chainLine, { mode: 0o755 });
