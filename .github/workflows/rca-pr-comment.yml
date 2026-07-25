@@ -7,6 +7,11 @@ on:
 jobs:
   rca-check:
     runs-on: ubuntu-latest
+    # The default GITHUB_TOKEN is read-only here, so posting the summary
+    # comment fails with 403 and takes the job down with it.
+    permissions:
+      contents: read
+      pull-requests: write
     if: contains(github.event.pull_request.title, 'fix') || contains(github.event.pull_request.title, 'Fix')
     steps:
       - uses: actions/checkout@v4
