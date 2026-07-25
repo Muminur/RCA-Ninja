@@ -385,7 +385,7 @@ All endpoints behind requireAuth. User-visible: brief 500s on /api/me,
 | `claude-rca recent [count]`    | List the N most recent RCAs (default: 10)             |
 | `claude-rca show <id>`         | Display an RCA by filename, hash, or path             |
 | `claude-rca config`            | Read/write configuration values                       |
-| `claude-rca doctor`            | Verify environment (Node, git, rg, claude)            |
+| `claude-rca doctor`            | Verify environment (Node, git, rg, claude) **and pipeline wiring** (config, hook, auto-gen) |
 | `claude-rca obsidian sync`     | Sync an RCA file to the Obsidian vault                |
 | `claude-rca mcp-server`        | Start the MCP server for Claude Desktop/Code          |
 | `claude-rca setup`             | Interactive setup wizard                              |
@@ -569,6 +569,21 @@ git config --global core.hooksPath ~/.git-hooks    # once, then drop post-commit
 The global fallback is safe to install machine-wide: in a repo with neither a
 config nor an `rca/` directory the hook logs `INFO` and exits without warning,
 so it never nags in projects that do not use claude-rca.
+
+To audit any repo in one command, `claude-rca doctor` reports the pipeline
+itself alongside the external tools — which config file resolved, whether a
+`post-commit` hook is present at the **effective** hooks directory (honouring
+`core.hooksPath`), and whether `auto_generate` is on:
+
+```
+node      ok    v25.2.1
+git       ok    git version 2.43.0
+rg        ok    ripgrep 15.1.0
+claude    ok    2.1.220 (Claude Code)
+config    ok    /path/to/repo/.claude-rca.json
+hook      ok    /path/to/repo/.git/hooks/post-commit
+auto-gen  ok    true — fix: commits generate RCAs automatically
+```
 
 ### commit-msg
 

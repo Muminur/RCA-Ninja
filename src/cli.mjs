@@ -796,6 +796,61 @@ export function createProgram() {
         return ver;
       });
 
+      // Non-fatal, but always visible: the pipeline's own wiring. External
+      // tools being healthy told us nothing about whether RCAs were actually
+      // being produced — a dead pipeline reported a clean bill of health.
+      function note(name, status, detail) {
+        checks.push({ name, status, detail });
+      }
+
+      const doctorCwd = program.opts().cwd || process.cwd();
+      const resolvedConfig = program.opts().config || findProjectConfig(doctorCwd);
+      if (resolvedConfig) {
+        note('config', 'ok', resolvedConfig);
+      } else {
+        note('config', 'WARN', `no ${PROJECT_CONFIG_NAME} resolved — run 'claude-rca init'`);
+      }
+
+      // Honour core.hooksPath: `--git-path hooks` returns the effective dir.
+      let hooksDir;
+      try {
+        hooksDir = execSync('git', ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'], {
+          cwd: doctorCwd,
+          encoding: 'utf8',
+        }).trim();
+      } catch {
+        hooksDir = null;
+      }
+      if (!hooksDir) {
+        note('hook', 'WARN', 'not a git repository');
+      } else {
+        const hookFile = pathJoin(hooksDir, 'post-commit');
+        if (!fsExistsSync(hookFile)) {
+          note('hook', 'WARN', `no post-commit hook at ${hookFile} — run 'claude-rca init'`);
+        } else if (!fsReadFileSync(hookFile, 'utf8').includes('claude-rca')) {
+          note('hook', 'WARN', `post-commit at ${hookFile} does not call claude-rca`);
+        } else {
+          note('hook', 'ok', hookFile);
+        }
+      }
+
+      if (resolvedConfig) {
+        try {
+          const autoCfg = loadConfig({ cwd: doctorCwd, configPath: program.opts().config });
+          if (autoCfg.auto_generate === true) {
+            note('auto-gen', 'ok', 'true — fix: commits generate RCAs automatically');
+          } else {
+            note(
+              'auto-gen',
+              'WARN',
+              "false — set with 'claude-rca config --set auto_generate=true'",
+            );
+          }
+        } catch {
+          note('auto-gen', 'WARN', 'config could not be loaded');
+        }
+      }
+
       const maxName = Math.max(...checks.map((c) => c.name.length));
       for (const c of checks) {
         process.stdout.write(`${c.name.padEnd(maxName + 2)}${c.status.padEnd(6)}${c.detail}\n`);
