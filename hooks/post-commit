@@ -2,6 +2,9 @@
 # codex-rca / claude-rca post-commit hook — generates an RCA when the commit
 # message starts with "fix:" (Conventional Commits) and the user has
 # enabled auto_generate in config.
+#
+# Design rule: a fix: commit that produces no RCA must be LOUD. Silence is
+# only acceptable when the user deliberately turned auto_generate off.
 
 set -eu
 
@@ -17,6 +20,12 @@ log() {
   echo "[${TIMESTAMP}] [${1}] ref=${REF} ${2}" >> "${LOG_FILE}" 2>/dev/null || true
 }
 
+# Surface problems in the git commit output — a log file nobody reads is how
+# a broken RCA pipeline stays broken for days.
+warn() {
+  printf '%s: %s\n' "${RCA_BIN:-rca}" "${1}" >&2 || true
+}
+
 RCA_BIN="${RCA_BIN:-}"
 if [ -z "${RCA_BIN}" ]; then
   if command -v codex-rca >/dev/null 2>&1; then
@@ -26,41 +35,69 @@ if [ -z "${RCA_BIN}" ]; then
   fi
 fi
 
-# Bail if the RCA CLI isn't installed — but LOG the failure.
-if ! command -v "${RCA_BIN}" >/dev/null 2>&1; then
-  log "ERROR" "${RCA_BIN} not found on PATH — run 'npm link' in the codex-rca repo"
-  exit 0
-fi
-
-# Only run if auto_generate is true.
-if ! "${RCA_BIN}" config --get auto_generate 2>/dev/null | grep -qx true; then
-  log "INFO" "skipped: auto_generate is not true"
-  exit 0
-fi
-
+# Nothing to do unless this is a fix: commit. Checked first so ordinary commits
+# never pay for a node process, and so the log stays readable.
 case "$MSG" in
   fix:*|fix\(*\):*)
-    log "INFO" "fix commit detected, starting RCA generation"
-    # Run in background so commit returns immediately.
-    (
-      GEN_LOG="$("${RCA_BIN}" config --get log.file 2>/dev/null || echo "${LOG_FILE}")"
-      OUTPUT_DIR="$("${RCA_BIN}" config --get output_dir 2>/dev/null || echo rca)"
-      if "${RCA_BIN}" generate --from HEAD >>"${GEN_LOG}" 2>&1; then
-        log "INFO" "RCA generated successfully"
-        rm -f "${OUTPUT_DIR}/.last-rca-error"
-      else
-        LAST_LINE="$(tail -1 "${GEN_LOG}" 2>/dev/null || echo 'unknown error')"
-        ERROR_MSG="$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" -- "${LAST_LINE}" 2>/dev/null || echo "\"${LAST_LINE}\"")"
-        log "ERROR" "generation failed: ${LAST_LINE}"
-        printf '{"timestamp":"%s","ref":"%s","error":%s}\n' \
-          "${TIMESTAMP}" "${REF}" "${ERROR_MSG}" \
-          >"${OUTPUT_DIR}/.last-rca-error" 2>/dev/null || true
-      fi
-    ) &
-    disown 2>/dev/null || true
     ;;
   *)
     log "INFO" "skipped: commit message does not start with fix:"
     exit 0
     ;;
 esac
+
+# Bail if the RCA CLI isn't installed — but LOG and WARN, since a fix: commit
+# is silently losing its RCA.
+if ! command -v "${RCA_BIN}" >/dev/null 2>&1; then
+  log "ERROR" "${RCA_BIN} not found on PATH — run 'npm link' in the codex-rca repo"
+  warn "not on PATH — this fix: commit got NO RCA. Run 'npm link' in the codex-rca repo."
+  exit 0
+fi
+
+# Distinguish "config could not be resolved" (a fault) from "auto_generate is
+# off" (a choice). Collapsing these into one message is what hid a multi-day
+# outage: every commit logged the same benign-looking skip line.
+CFG_PATH="$("${RCA_BIN}" config --path 2>/dev/null || true)"
+if [ -z "${CFG_PATH}" ]; then
+  # This hook may be installed globally (core.hooksPath), so it runs in repos
+  # that never used the RCA CLI. Only shout when the repo shows evidence that it
+  # did — otherwise the warning is noise and stops being believed.
+  MAIN_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo .)")"
+  if [ -d "${MAIN_ROOT}/rca" ]; then
+    log "ERROR" "no config resolved from $(pwd) but ${MAIN_ROOT}/rca exists — RCA generation is OFF for this repo"
+    warn "no .claude-rca.json resolved from $(pwd) — this fix: commit got NO RCA. Run '${RCA_BIN} init' or '${RCA_BIN} doctor'."
+  else
+    log "INFO" "skipped: RCA CLI not configured for this repo"
+  fi
+  exit 0
+fi
+
+# Only run if auto_generate is true. This one IS a deliberate choice, so it
+# stays quiet.
+if ! "${RCA_BIN}" config --get auto_generate 2>/dev/null | grep -qx true; then
+  log "INFO" "skipped: auto_generate is not true in ${CFG_PATH}"
+  exit 0
+fi
+
+log "INFO" "fix commit detected, starting RCA generation (config: ${CFG_PATH})"
+# Run in background so commit returns immediately.
+(
+  GEN_LOG="$("${RCA_BIN}" config --get log.file 2>/dev/null || echo "${LOG_FILE}")"
+  # An unset key must never become a filename literally called "undefined".
+  case "${GEN_LOG}" in
+    undefined|"") GEN_LOG="${LOG_FILE}" ;;
+  esac
+  OUTPUT_DIR="$("${RCA_BIN}" config --get output_dir 2>/dev/null || echo rca)"
+  if "${RCA_BIN}" generate --from HEAD >>"${GEN_LOG}" 2>&1; then
+    log "INFO" "RCA generated successfully"
+    rm -f "${OUTPUT_DIR}/.last-rca-error"
+  else
+    LAST_LINE="$(tail -1 "${GEN_LOG}" 2>/dev/null || echo 'unknown error')"
+    ERROR_MSG="$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" -- "${LAST_LINE}" 2>/dev/null || echo "\"${LAST_LINE}\"")"
+    log "ERROR" "generation failed: ${LAST_LINE}"
+    printf '{"timestamp":"%s","ref":"%s","error":%s}\n' \
+      "${TIMESTAMP}" "${REF}" "${ERROR_MSG}" \
+      >"${OUTPUT_DIR}/.last-rca-error" 2>/dev/null || true
+  fi
+) &
+disown 2>/dev/null || true

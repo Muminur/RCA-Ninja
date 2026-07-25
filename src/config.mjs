@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, dirname, sep } from 'node:path';
 import { homedir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { validateConfig, VALID_KEYS } from './schema.mjs';
 import { RcaError } from './errors.mjs';
 
@@ -66,6 +67,80 @@ function tryLoadJson(path) {
   }
 }
 
+export const PROJECT_CONFIG_NAME = '.claude-rca.json';
+
+/** Case/separator-insensitive path compare (Windows drive + slash variance). */
+function samePath(a, b) {
+  return a.replace(/[\\/]+/g, sep).toLowerCase() === b.replace(/[\\/]+/g, sep).toLowerCase();
+}
+
+/** Synchronous, non-throwing git query. Returns null outside a repo. */
+function gitSync(args, cwd) {
+  try {
+    const out = execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+    const trimmed = out.trim();
+    return trimmed || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a git path query to an absolute path. `--path-format=absolute` needs
+ * git >= 2.31; older versions fall back to resolving the raw output against cwd.
+ */
+function gitAbsPath(what, cwd) {
+  const modern = gitSync(['rev-parse', '--path-format=absolute', what], cwd);
+  if (modern) return resolve(modern);
+  const legacy = gitSync(['rev-parse', what], cwd);
+  return legacy ? resolve(cwd, legacy) : null;
+}
+
+/**
+ * Locate the project config file.
+ *
+ * Order matters, and each step exists for a concrete failure:
+ *   1. cwd — the common case, and lets a worktree override deliberately.
+ *   2. Walk up, BOUNDED at the repo top-level — so running from a subdirectory
+ *      works without adopting an unrelated config from a parent directory.
+ *   3. The main checkout, via --git-common-dir — a linked worktree never
+ *      contains the (gitignored) config, and its top-level is itself, so the
+ *      bounded walk above cannot find it.
+ *
+ * Returns null when no config exists, leaving callers on DEFAULTS.
+ */
+export function findProjectConfig(cwd) {
+  const direct = join(cwd, PROJECT_CONFIG_NAME);
+  if (existsSync(direct)) return direct;
+
+  const top = gitAbsPath('--show-toplevel', cwd);
+  if (top) {
+    let dir = resolve(cwd);
+    // Depth guard: cwd is normally under `top`, but never loop unbounded if not.
+    for (let depth = 0; depth < 64; depth += 1) {
+      const candidate = join(dir, PROJECT_CONFIG_NAME);
+      if (existsSync(candidate)) return candidate;
+      if (samePath(dir, top)) break;
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+
+  const commonDir = gitAbsPath('--git-common-dir', cwd);
+  if (commonDir) {
+    const candidate = join(dirname(commonDir), PROJECT_CONFIG_NAME);
+    if (existsSync(candidate)) return candidate;
+  }
+
+  return null;
+}
+
 export function loadConfig({ cwd = process.cwd(), configPath = null } = {}) {
   loadDotenv(cwd);
 
@@ -77,7 +152,8 @@ export function loadConfig({ cwd = process.cwd(), configPath = null } = {}) {
   const xdgConfig = tryLoadJson(join(xdgHome, 'claude-rca', 'config.json'));
   if (xdgConfig) sources.push(xdgConfig);
 
-  const projectConfig = tryLoadJson(join(cwd, '.claude-rca.json'));
+  const projectConfigPath = findProjectConfig(cwd);
+  const projectConfig = projectConfigPath ? tryLoadJson(projectConfigPath) : null;
   if (projectConfig) sources.push(projectConfig);
 
   const envPath = process.env.CLAUDE_RCA_CONFIG;
@@ -98,9 +174,19 @@ export function loadConfig({ cwd = process.cwd(), configPath = null } = {}) {
 
   const { data } = validateConfig(merged);
 
+  // A relative output_dir belongs to the project that owns the config, not to
+  // wherever the process happens to be running. Without this, a hook firing in
+  // a linked worktree writes RCAs into the worktree and they die with it.
   if (data.output_dir) {
-    data.output_dir = resolve(cwd, data.output_dir);
+    const baseDir = projectConfigPath ? dirname(projectConfigPath) : cwd;
+    data.output_dir = resolve(baseDir, data.output_dir);
   }
+
+  // Record provenance so callers (and `doctor`) can report which file was used.
+  Object.defineProperty(data, 'configPath', {
+    value: projectConfigPath,
+    enumerable: false,
+  });
 
   if (process.env.OBSIDIAN_API_KEY) {
     if (!data.obsidian) data.obsidian = {};
