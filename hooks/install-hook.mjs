@@ -4,7 +4,8 @@
 // Idempotent: re-running updates existing claude-rca hooks, chains with others.
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -92,8 +93,56 @@ function ensureOnPath() {
   }
 }
 
+/**
+ * Install the machine-wide fallback.
+ *
+ * `.git/hooks` is not version-controlled, so a fresh clone has no post-commit
+ * hook and says nothing about it — a fix: commit just silently produces no RCA.
+ * A global core.hooksPath closes that gap for every repo without a local
+ * override. Only post-commit goes here: a global commit-msg would enforce
+ * Conventional Commits in every repository on the machine.
+ */
+function installGlobal() {
+  let hookDir = null;
+  try {
+    hookDir = execFileSync('git', ['config', '--global', '--get', 'core.hooksPath'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    hookDir = null;
+  }
+
+  if (!hookDir) {
+    hookDir = join(homedir(), '.git-hooks');
+    try {
+      execFileSync('git', ['config', '--global', 'core.hooksPath', hookDir], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      console.log(`✓ set global core.hooksPath to ${hookDir}`);
+    } catch {
+      console.error(
+        `⚠ could not set global core.hooksPath — run: git config --global core.hooksPath ${hookDir}`,
+      );
+      return false;
+    }
+  }
+
+  mkdirSync(hookDir, { recursive: true });
+  const ok = installOne('post-commit', hookDir);
+  console.log(`  (global fallback only — commit-msg is intentionally per-repo)`);
+  return ok;
+}
+
 // --- Main ---
-const cwd = process.argv[2] || process.cwd();
+const args = process.argv.slice(2);
+const globalMode = args.includes('--global');
+
+if (globalMode) {
+  process.exit(installGlobal() ? 0 : 1);
+}
+
+const cwd = args[0] || process.cwd();
 const hookDir = getHookDir(cwd);
 
 if (!hookDir) {

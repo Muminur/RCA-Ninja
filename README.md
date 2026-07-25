@@ -562,9 +562,15 @@ than inside the worktree, where they would be lost when it is removed.
 _silently_. Two ways to close that gap:
 
 ```bash
-claude-rca init                                    # per repo (also repairs a stale hook)
-git config --global core.hooksPath ~/.git-hooks    # once, then drop post-commit in there
+claude-rca init                     # per repo (also repairs a stale hook)
+node hooks/install-hook.mjs --global    # machine-wide fallback for every other repo
 ```
+
+`--global` sets `core.hooksPath` to `~/.git-hooks` if it is not already set,
+then installs `post-commit` there from the same template. Re-run it after
+changing the template — it is idempotent and refreshes a stale copy. Only
+`post-commit` is installed globally; a global `commit-msg` would enforce
+Conventional Commits in every repository on the machine.
 
 The global fallback is safe to install machine-wide: in a repo with neither a
 config nor an `rca/` directory the hook logs `INFO` and exits without warning,
