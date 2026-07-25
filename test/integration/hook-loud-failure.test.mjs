@@ -49,6 +49,19 @@ describe('post-commit hook fails loudly, never silently', () => {
     assert.ok(warnCalled(block), 'the no-config path must call warn() so the user sees it');
   });
 
+  it('stays quiet in repos that never used claude-rca (global-install safe)', () => {
+    const idx = src.indexOf('config --path');
+    const block = src.slice(idx, idx + 900);
+    assert.ok(
+      /-d "\$\{MAIN_ROOT\}\/rca"/.test(block),
+      'the no-config path must check for an existing rca/ corpus before warning',
+    );
+    assert.ok(
+      /log "INFO" "skipped: claude-rca not configured/.test(block),
+      'an unconfigured repo must log INFO, not ERROR — otherwise the warning becomes noise',
+    );
+  });
+
   it('never uses the literal string "undefined" as a log filename', () => {
     assert.ok(
       src.includes('undefined'),

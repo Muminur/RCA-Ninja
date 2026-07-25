@@ -50,8 +50,16 @@ fi
 # outage: every commit logged the same benign-looking skip line.
 CFG_PATH="$(claude-rca config --path 2>/dev/null || true)"
 if [ -z "${CFG_PATH}" ]; then
-  log "ERROR" "no config resolved from $(pwd) — RCA generation is OFF for this repo"
-  warn "no .claude-rca.json resolved from $(pwd) — this fix: commit got NO RCA. Run 'claude-rca init' or 'claude-rca doctor'."
+  # This hook may be installed globally (core.hooksPath), so it runs in repos
+  # that never used claude-rca. Only shout when the repo shows evidence that it
+  # did — otherwise the warning is noise and stops being believed.
+  MAIN_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo .)")"
+  if [ -d "${MAIN_ROOT}/rca" ]; then
+    log "ERROR" "no config resolved from $(pwd) but ${MAIN_ROOT}/rca exists — RCA generation is OFF for this repo"
+    warn "no .claude-rca.json resolved from $(pwd) — this fix: commit got NO RCA. Run 'claude-rca init' or 'claude-rca doctor'."
+  else
+    log "INFO" "skipped: claude-rca not configured for this repo"
+  fi
   exit 0
 fi
 
