@@ -325,6 +325,95 @@ export function createProgram() {
         const configPath = program.opts().config;
         const cfg = loadConfig({ cwd, configPath });
 
+        // Shared by --from and --since. Batch mode previously wrote the RCA and
+        // stopped there, so a backfill silently left the vault missing every
+        // document it produced.
+        async function deliverRca({ writtenPath, rca, context }) {
+          if (opts.obsidian !== false && cfg.obsidian && cfg.obsidian.enabled) {
+            try {
+              const { resolveTargetFolder } = await import('./obsidian.mjs');
+              const repoName = context.repo_root ? context.repo_root.split(/[/\\]/).pop() : '';
+              const targetFolder = resolveTargetFolder({
+                configTargetFolder: cfg.obsidian.target_folder || '',
+                repoName,
+              });
+              const vaultPath = cfg.obsidian.vault_path;
+              const rcaBasename = basename(writtenPath);
+              const rcaContent = readFileSync(writtenPath, 'utf8');
+              let synced = false;
+
+              if (cfg.obsidian.api_key) {
+                try {
+                  const client = createObsidianClient({
+                    apiKey: cfg.obsidian.api_key,
+                    host: cfg.obsidian.api_host || '127.0.0.1',
+                    port: cfg.obsidian.api_port || 27124,
+                    protocol: cfg.obsidian.api_protocol || 'https',
+                  });
+                  const notePath = `${targetFolder}/${rcaBasename}`;
+                  await client.createNote(notePath, rcaContent);
+                  process.stderr.write(`✓ synced to vault via REST API: ${notePath}\n`);
+                  synced = true;
+
+                  if (cfg.obsidian.update_daily_note) {
+                    const dailyNotesFolder = cfg.obsidian.daily_notes_folder || 'Daily Notes';
+                    const format = cfg.obsidian.daily_note_format || 'YYYY-MM-DD';
+                    const today = new Date().toISOString().slice(0, 10);
+                    const noteName = format
+                      .replace('YYYY', today.slice(0, 4))
+                      .replace('MM', today.slice(5, 7))
+                      .replace('DD', today.slice(8, 10));
+                    const linkName = rcaBasename.replace(/\.md$/, '');
+                    const bullet = `\n- [[${linkName}]] — ${rca.title}\n`;
+                    try {
+                      await client.appendNote(`${dailyNotesFolder}/${noteName}.md`, bullet);
+                      process.stderr.write(`✓ daily note updated via REST API\n`);
+                    } catch {
+                      process.stderr.write(`⚠ daily note not found (skipped)\n`);
+                    }
+                  }
+                } catch (apiErr) {
+                  process.stderr.write(`⚠ REST API sync failed: ${apiErr.message}\n`);
+                  process.stderr.write(`  falling back to filesystem sync...\n`);
+                }
+              }
+
+              if (!synced && vaultPath) {
+                await syncToVault({ rcaPath: writtenPath, vaultPath, targetFolder });
+                process.stderr.write(
+                  `✓ synced to vault via filesystem: ${targetFolder}/${rcaBasename}\n`,
+                );
+
+                if (cfg.obsidian.update_daily_note) {
+                  appendDailyNote({
+                    vaultPath,
+                    dailyNotesFolder: cfg.obsidian.daily_notes_folder || 'Daily Notes',
+                    dailyNoteFormat: cfg.obsidian.daily_note_format || 'YYYY-MM-DD',
+                    rcaBasename,
+                    title: rca.title,
+                  });
+                }
+              }
+
+              if (cfg.obsidian.open_on_create && vaultPath) {
+                const uri = buildObsidianUri({ vaultPath, targetFolder, rcaBasename });
+                process.stderr.write(`✓ obsidian: ${uri}\n`);
+              }
+            } catch (obsErr) {
+              process.stderr.write(`⚠ obsidian sync failed: ${obsErr.message}\n`);
+            }
+          }
+
+          // Webhook notification (non-blocking, like Obsidian sync)
+          if (cfg.webhooks && cfg.webhooks.enabled && cfg.webhooks.url) {
+            try {
+              await sendWebhook(rca, writtenPath, cfg);
+            } catch (whErr) {
+              process.stderr.write(`⚠ webhook notification failed: ${whErr.message}\n`);
+            }
+          }
+        }
+
         // --since: batch mode for historical fix commits
         if (opts.since) {
           const { getFixCommits } = await import('./context.mjs');
@@ -376,6 +465,7 @@ export function createProgram() {
               } catch {
                 /* non-blocking */
               }
+              await deliverRca({ writtenPath, rca, context });
             } catch (commitErr) {
               process.stderr.write(`    ✖ skipped (${commitErr.message || String(commitErr)})\n`);
             }
@@ -470,90 +560,8 @@ export function createProgram() {
           // manifest rebuild is non-blocking
         }
 
-        if (opts.obsidian !== false && cfg.obsidian && cfg.obsidian.enabled) {
-          progress.update('Syncing to Obsidian');
-          try {
-            const { resolveTargetFolder } = await import('./obsidian.mjs');
-            const repoName = context.repo_root ? context.repo_root.split(/[/\\]/).pop() : '';
-            const targetFolder = resolveTargetFolder({
-              configTargetFolder: cfg.obsidian.target_folder || '',
-              repoName,
-            });
-            const vaultPath = cfg.obsidian.vault_path;
-            const rcaBasename = basename(writtenPath);
-            const rcaContent = readFileSync(writtenPath, 'utf8');
-            let synced = false;
-
-            if (cfg.obsidian.api_key) {
-              try {
-                const client = createObsidianClient({
-                  apiKey: cfg.obsidian.api_key,
-                  host: cfg.obsidian.api_host || '127.0.0.1',
-                  port: cfg.obsidian.api_port || 27124,
-                  protocol: cfg.obsidian.api_protocol || 'https',
-                });
-                const notePath = `${targetFolder}/${rcaBasename}`;
-                await client.createNote(notePath, rcaContent);
-                process.stderr.write(`✓ synced to vault via REST API: ${notePath}\n`);
-                synced = true;
-
-                if (cfg.obsidian.update_daily_note) {
-                  const dailyNotesFolder = cfg.obsidian.daily_notes_folder || 'Daily Notes';
-                  const format = cfg.obsidian.daily_note_format || 'YYYY-MM-DD';
-                  const today = new Date().toISOString().slice(0, 10);
-                  const noteName = format
-                    .replace('YYYY', today.slice(0, 4))
-                    .replace('MM', today.slice(5, 7))
-                    .replace('DD', today.slice(8, 10));
-                  const linkName = rcaBasename.replace(/\.md$/, '');
-                  const bullet = `\n- [[${linkName}]] — ${rca.title}\n`;
-                  try {
-                    await client.appendNote(`${dailyNotesFolder}/${noteName}.md`, bullet);
-                    process.stderr.write(`✓ daily note updated via REST API\n`);
-                  } catch {
-                    process.stderr.write(`⚠ daily note not found (skipped)\n`);
-                  }
-                }
-              } catch (apiErr) {
-                process.stderr.write(`⚠ REST API sync failed: ${apiErr.message}\n`);
-                process.stderr.write(`  falling back to filesystem sync...\n`);
-              }
-            }
-
-            if (!synced && vaultPath) {
-              await syncToVault({ rcaPath: writtenPath, vaultPath, targetFolder });
-              process.stderr.write(
-                `✓ synced to vault via filesystem: ${targetFolder}/${rcaBasename}\n`,
-              );
-
-              if (cfg.obsidian.update_daily_note) {
-                appendDailyNote({
-                  vaultPath,
-                  dailyNotesFolder: cfg.obsidian.daily_notes_folder || 'Daily Notes',
-                  dailyNoteFormat: cfg.obsidian.daily_note_format || 'YYYY-MM-DD',
-                  rcaBasename,
-                  title: rca.title,
-                });
-              }
-            }
-
-            if (cfg.obsidian.open_on_create && vaultPath) {
-              const uri = buildObsidianUri({ vaultPath, targetFolder, rcaBasename });
-              process.stderr.write(`✓ obsidian: ${uri}\n`);
-            }
-          } catch (obsErr) {
-            process.stderr.write(`⚠ obsidian sync failed: ${obsErr.message}\n`);
-          }
-        }
-
-        // Webhook notification (non-blocking, like Obsidian sync)
-        if (cfg.webhooks && cfg.webhooks.enabled && cfg.webhooks.url) {
-          try {
-            await sendWebhook(rca, writtenPath, cfg);
-          } catch (whErr) {
-            process.stderr.write(`⚠ webhook notification failed: ${whErr.message}\n`);
-          }
-        }
+        progress.update('Syncing to Obsidian');
+        await deliverRca({ writtenPath, rca, context });
 
         // Analyst quality check (opt-in via --analyze)
         if (opts.analyze) {
