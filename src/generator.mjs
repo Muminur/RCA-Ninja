@@ -6,6 +6,7 @@ import { run } from './util/exec.mjs';
 import { validateRca } from './schema.mjs';
 import { RcaError } from './errors.mjs';
 import { estimatePayload, TOKEN_WARN_THRESHOLD, TOKEN_HARD_LIMIT } from './token-estimate.mjs';
+import { getProvider } from './providers/index.mjs';
 
 const SECRET_REGEX = new RegExp(
   [
@@ -37,87 +38,37 @@ export function buildContextPayload({ context, priorRcas, diffFile }) {
   };
 }
 
-export async function generate({
-  context,
-  config,
-  systemPromptPath,
-  schemaPath,
-  correctionHint,
-  priorRcas,
-}) {
-  const contextFile = join(tmpdir(), `claude-rca-ctx-${randomUUID()}.json`);
-  const diffFile = join(tmpdir(), `claude-rca-diff-${randomUUID()}.txt`);
+/**
+ * Run generation through a single named provider (claude or codex): build the
+ * invocation, run it with schema-validation retries, then post-process and
+ * validate the RCA. Throws RcaError SCHEMA_VALIDATION (already retried) or
+ * CLAUDE_FAILURE. The invocation's own temp files are cleaned up here.
+ */
+async function runProviderGenerate(
+  providerName,
+  { config, context, contextFile, diffFile, systemPrompt, schema, correctionHint, priorRcas },
+) {
+  const provider = getProvider(providerName);
+  const inv = provider.buildGenerateInvocation({
+    config,
+    contextFile,
+    diffFile,
+    systemPrompt,
+    schemaStr: schema,
+    correctionHint,
+    context,
+    priorRcas,
+  });
 
   try {
-    writeFileSync(
-      contextFile,
-      JSON.stringify(buildContextPayload({ context, priorRcas, diffFile })),
-    );
-    writeFileSync(diffFile, context.diff);
-
-    const systemPrompt = readFileSync(systemPromptPath, 'utf8');
-    const schema = readFileSync(schemaPath, 'utf8');
-
-    const systemPromptStr = systemPrompt;
-    const schemaStr = schema;
-    const contextJsonStr = JSON.stringify(buildContextPayload({ context, priorRcas, diffFile }));
-    const estimate = estimatePayload({
-      systemPrompt: systemPromptStr,
-      schema: schemaStr,
-      contextJson: contextJsonStr,
-      diff: context.diff,
-      priorRcas: JSON.stringify(priorRcas || []),
-    });
-
-    if (estimate.total > TOKEN_HARD_LIMIT) {
-      throw new RcaError('TOKEN_BUDGET_EXCEEDED', {
-        reason: `Estimated ${estimate.total} tokens exceeds hard limit of ${TOKEN_HARD_LIMIT}. Breakdown: system=${estimate.breakdown.system}, schema=${estimate.breakdown.schema}, context=${estimate.breakdown.context}, diff=${estimate.breakdown.diff}, prior=${estimate.breakdown.prior}`,
-      });
-    }
-    if (estimate.total > TOKEN_WARN_THRESHOLD) {
-      process.stderr.write(
-        `WARN: Token estimate ${estimate.total} exceeds warning threshold (${TOKEN_WARN_THRESHOLD}). Breakdown: ${JSON.stringify(estimate.breakdown)}\n`,
-      );
-    }
-    process.stderr.write(`INFO: estimated_tokens=${estimate.total}\n`);
-
-    const binaryRaw = config.claude?.binary || 'claude';
-    const binaryParts = binaryRaw.split(/\s+/);
-    const cmd = binaryParts[0];
-    const cmdPrefix = binaryParts.slice(1);
-    const permissionMode = config.claude?.permission_mode || 'plan';
-    const allowedTools = config.claude?.allowed_tools || 'Read';
-    const timeoutMs = config.claude?.timeout_ms || 60000;
-    const maxRetries = config.claude?.max_retries ?? 1;
-
-    const argv = [...cmdPrefix];
-    let prompt = `Read ${contextFile} and ${diffFile} and produce an RCA.`;
-    if (correctionHint) prompt += `\n\nCorrection hint: ${correctionHint}`;
-    argv.push('-p', prompt);
-    argv.push('--append-system-prompt', systemPrompt);
-    argv.push('--output-format', 'json');
-    argv.push('--json-schema', schema);
-    argv.push('--allowedTools', allowedTools);
-    argv.push('--permission-mode', permissionMode);
-
     let lastError;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= inv.maxRetries; attempt++) {
       try {
-        const { stdout } = await run(cmd, argv, { timeoutMs });
-        const parsed = JSON.parse(stdout);
-        let rcaData = parsed.structured_output;
-
-        if (!rcaData && parsed.result) {
-          const jsonMatch = parsed.result.match(/```json\s*([\s\S]*?)```/);
-          const raw = jsonMatch ? jsonMatch[1].trim() : parsed.result.trim();
-          try {
-            rcaData = JSON.parse(raw);
-          } catch (parseErr) {
-            throw new RcaError('SCHEMA_VALIDATION', {
-              ajv_first_error: `Could not parse RCA JSON from claude output: ${parseErr.message}`,
-            });
-          }
-        }
+        const { stdout } = await run(inv.cmd, inv.argv, {
+          timeoutMs: inv.timeoutMs,
+          input: inv.input,
+        });
+        const { rcaData, cost, sessionId } = inv.extractRca(stdout);
 
         if (rcaData) {
           const ALLOWED_KEYS = new Set([
@@ -191,14 +142,14 @@ export async function generate({
 
           return {
             rca: result.data,
-            cost: parsed.total_cost_usd,
-            sessionId: parsed.session_id,
+            cost,
+            sessionId,
             autoFilled,
           };
         }
       } catch (err) {
         lastError = err;
-        if (err.code === 'SCHEMA_VALIDATION' && attempt < maxRetries) {
+        if (err.code === 'SCHEMA_VALIDATION' && attempt < inv.maxRetries) {
           continue;
         }
         if (err.code === 'SCHEMA_VALIDATION') throw err;
@@ -209,6 +160,85 @@ export async function generate({
       }
     }
     throw lastError;
+  } finally {
+    try {
+      inv?.cleanup?.();
+    } catch {
+      /* cleanup */
+    }
+  }
+}
+
+export async function generate({
+  context,
+  config,
+  systemPromptPath,
+  schemaPath,
+  correctionHint,
+  priorRcas,
+}) {
+  const contextFile = join(tmpdir(), `claude-rca-ctx-${randomUUID()}.json`);
+  const diffFile = join(tmpdir(), `claude-rca-diff-${randomUUID()}.txt`);
+
+  try {
+    writeFileSync(
+      contextFile,
+      JSON.stringify(buildContextPayload({ context, priorRcas, diffFile })),
+    );
+    writeFileSync(diffFile, context.diff);
+
+    const systemPrompt = readFileSync(systemPromptPath, 'utf8');
+    const schema = readFileSync(schemaPath, 'utf8');
+
+    const contextJsonStr = JSON.stringify(buildContextPayload({ context, priorRcas, diffFile }));
+    const estimate = estimatePayload({
+      systemPrompt,
+      schema,
+      contextJson: contextJsonStr,
+      diff: context.diff,
+      priorRcas: JSON.stringify(priorRcas || []),
+    });
+
+    if (estimate.total > TOKEN_HARD_LIMIT) {
+      throw new RcaError('TOKEN_BUDGET_EXCEEDED', {
+        reason: `Estimated ${estimate.total} tokens exceeds hard limit of ${TOKEN_HARD_LIMIT}. Breakdown: system=${estimate.breakdown.system}, schema=${estimate.breakdown.schema}, context=${estimate.breakdown.context}, diff=${estimate.breakdown.diff}, prior=${estimate.breakdown.prior}`,
+      });
+    }
+    if (estimate.total > TOKEN_WARN_THRESHOLD) {
+      process.stderr.write(
+        `WARN: Token estimate ${estimate.total} exceeds warning threshold (${TOKEN_WARN_THRESHOLD}). Breakdown: ${JSON.stringify(estimate.breakdown)}\n`,
+      );
+    }
+    process.stderr.write(`INFO: estimated_tokens=${estimate.total}\n`);
+
+    const runOpts = {
+      config,
+      context,
+      contextFile,
+      diffFile,
+      systemPrompt,
+      schema,
+      correctionHint,
+      priorRcas,
+    };
+
+    // Run the configured provider. On a non-schema failure of the default
+    // (claude) provider, fall back to codex when it is explicitly configured —
+    // the "Claude unavailable → Codex" resilience feature. We gate on
+    // `config.codex` (which has no schema defaults, so it is only present when
+    // the user opts in); `config.claude` is always defaulted, so we never
+    // auto-fall-back the other direction onto the real claude binary.
+    const primaryName = config.provider || 'claude';
+    try {
+      return await runProviderGenerate(primaryName, runOpts);
+    } catch (primaryErr) {
+      if (primaryErr.code === 'SCHEMA_VALIDATION') throw primaryErr;
+      if (primaryName === 'claude' && config.codex) {
+        process.stderr.write('WARN: claude generation failed; falling back to codex.\n');
+        return await runProviderGenerate('codex', runOpts);
+      }
+      throw primaryErr;
+    }
   } finally {
     try {
       unlinkSync(contextFile);

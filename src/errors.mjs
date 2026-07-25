@@ -1,15 +1,16 @@
 const ERROR_TABLE = {
   ALREADY_INIT: { category: 'input', exit: 10, template: 'Already initialized at {path}.' },
   NO_DIFF: { category: 'input', exit: 20, template: 'No diff to analyze for ref {ref}.' },
+  // CLAUDE_FAILURE: kept for exit-code (21) stability; covers any LLM provider.
   CLAUDE_FAILURE: {
     category: 'external',
     exit: 21,
-    template: 'claude exited {exitCode} ({stderr_first_line}).',
+    template: 'LLM provider exited {exitCode} ({stderr_first_line}).',
   },
   SCHEMA_VALIDATION: {
     category: 'external',
     exit: 22,
-    template: 'Claude output failed schema validation: {ajv_first_error}.',
+    template: 'LLM output failed schema validation: {ajv_first_error}.',
   },
   WRITE_CONFLICT: {
     category: 'fs',

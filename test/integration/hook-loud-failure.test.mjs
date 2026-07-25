@@ -57,7 +57,7 @@ describe('post-commit hook fails loudly, never silently', () => {
       'the no-config path must check for an existing rca/ corpus before warning',
     );
     assert.ok(
-      /log "INFO" "skipped: claude-rca not configured/.test(block),
+      /log "INFO" "skipped: .*not configured for this repo/.test(block),
       'an unconfigured repo must log INFO, not ERROR — otherwise the warning becomes noise',
     );
   });
@@ -73,9 +73,10 @@ describe('post-commit hook fails loudly, never silently', () => {
     );
   });
 
-  it('checks the commit message before spawning claude-rca', () => {
+  it('checks the commit message before spawning the RCA CLI', () => {
     const msgCase = src.indexOf('fix:*');
-    const firstRca = src.indexOf('claude-rca config');
+    // Matches both the bare name and the ${RCA_BIN} indirection.
+    const firstRca = src.search(/(\$\{RCA_BIN\}"?|claude-rca|codex-rca)\s+config/);
     assert.ok(
       msgCase !== -1 && firstRca !== -1 && msgCase < firstRca,
       'non-fix commits must not pay for a node process or spam the log',

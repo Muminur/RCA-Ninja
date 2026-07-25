@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { RcaError } from '../errors.mjs';
 
-export function run(cmd, args = [], { cwd, timeoutMs = 30000, env } = {}) {
+export function run(cmd, args = [], { cwd, timeoutMs = 30000, env, input } = {}) {
   return new Promise((resolve, reject) => {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -11,8 +11,17 @@ export function run(cmd, args = [], { cwd, timeoutMs = 30000, env } = {}) {
       shell: false,
       signal: ac.signal,
       env: env || process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // Pipe stdin only when we have input to send. Passing a large prompt via
+      // stdin (instead of argv) keeps us under the OS command-line length limit
+      // (e.g. Windows' ~32 KB CreateProcess cap) for big diffs.
+      stdio: [input != null ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     });
+
+    if (input != null) {
+      // Guard against EPIPE if the child exits before consuming all input.
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    }
 
     const chunks = { stdout: [], stderr: [] };
     child.stdout.on('data', (d) => chunks.stdout.push(d));

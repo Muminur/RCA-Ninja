@@ -26,9 +26,12 @@ function parseAgentFile(filePath) {
 }
 
 describe('subagents', () => {
-  it('agents directory has at least 2 agent files', { skip: SKIP }, () => {
+  it('agents directory contains at least one agent file', { skip: SKIP }, () => {
+    // Only rca-analyst.md is a tracked product agent; the workflow-orchestration
+    // agents (code-reviewer, planner, merger, …) are gitignored scaffolding and
+    // may be absent on a fresh clone, so we assert presence of ≥1, not a count.
     const files = readdirSync(AGENTS_DIR).filter((f) => f.endsWith('.md'));
-    assert.ok(files.length >= 2, `Expected ≥2 agent files, got ${files.length}`);
+    assert.ok(files.length >= 1, `Expected ≥1 agent file, got ${files.length}`);
   });
 
   it('all agent files have valid YAML frontmatter', { skip: SKIP }, () => {
@@ -62,8 +65,12 @@ describe('subagents', () => {
     }
   });
 
-  it('code-reviewer.md exists with correct name and tools fields', { skip: SKIP }, () => {
-    const { fm } = parseAgentFile(join(AGENTS_DIR, 'code-reviewer.md'));
+  it('code-reviewer.md, when present, has correct name and tools fields', { skip: SKIP }, () => {
+    // code-reviewer.md is a gitignored workflow-scaffolding agent. Validate it
+    // only when it is actually checked out (e.g. on a maintainer machine).
+    const p = join(AGENTS_DIR, 'code-reviewer.md');
+    if (!existsSync(p)) return;
+    const { fm } = parseAgentFile(p);
     assert.strictEqual(fm.name, 'code-reviewer');
     assert.ok(fm.tools || fm.model, 'code-reviewer.md must have tools or model field');
   });

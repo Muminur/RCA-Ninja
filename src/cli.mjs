@@ -34,11 +34,13 @@ const pkg = require(join(__dirname, '..', 'package.json'));
 
 export function createProgram() {
   const program = new Command();
+  const invokedName = basename(process.argv[1] || 'claude-rca');
+  const cliName = invokedName === 'codex-rca' ? 'codex-rca' : 'claude-rca';
 
   program
-    .name('claude-rca')
+    .name(cliName)
     .description(
-      'Local-first CLI that generates structured Root Cause Analysis artifacts from bug-fix commits',
+      'Local-first RCA CLI for Codex and Claude workflows that generates structured Root Cause Analysis artifacts from bug-fix commits',
     )
     .version(pkg.version)
     .option('--cwd <path>', 'Run as if from <path>')
@@ -103,18 +105,18 @@ export function createProgram() {
             process.stderr.write(`⚠ git hooks not installed (installer failed)\n`);
           }
 
-          // Verify claude-rca is on PATH (hook installer does this too,
+          // Verify the invoked CLI is on PATH (hook installer does this too,
           // but repeat here in case the installer was skipped or failed)
           try {
             const { spawnSync: spawnCheck } = await import('node:child_process');
             const which = spawnCheck(
               process.platform === 'win32' ? 'where.exe' : 'which',
-              ['claude-rca'],
+              [cliName],
               { shell: false, stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 },
             );
             if (which.status !== 0) {
               process.stderr.write(
-                `⚠ claude-rca is not on PATH — the post-commit hook will not fire.\n`,
+                `⚠ ${cliName} is not on PATH — the post-commit hook will not fire.\n`,
               );
               process.stderr.write(`  Run: cd ${join(__dirname, '..')} && npm link\n`);
             }
@@ -254,7 +256,21 @@ export function createProgram() {
           () => execSync('rg', ['--version'], { encoding: 'utf8' }).trim().split('\n')[0],
         );
 
-        doctorCheck('claude', () => execSync('claude', ['--version'], { encoding: 'utf8' }).trim());
+        let setupProvider = 'claude';
+        let setupBinary = 'claude';
+        try {
+          const cfg = loadConfig({ cwd, configPath });
+          setupProvider = cfg.provider || 'claude';
+          setupBinary =
+            setupProvider === 'codex'
+              ? cfg.codex?.binary || 'codex'
+              : cfg.claude?.binary || 'claude';
+        } catch {
+          /* fall back to claude defaults */
+        }
+        doctorCheck(setupProvider, () =>
+          execSync(setupBinary.split(/\s+/)[0], ['--version'], { encoding: 'utf8' }).trim(),
+        );
 
         const maxName = Math.max(...doctorChecks.map((c) => c.name.length));
         for (const c of doctorChecks) {
@@ -791,9 +807,22 @@ export function createProgram() {
         return ver;
       });
 
-      check('claude', () => {
-        const ver = execSync('claude', ['--version'], { encoding: 'utf8' }).trim();
-        return ver;
+      // Check the binary for the configured LLM provider (claude or codex), not
+      // a hardcoded one — a codex user must not fail doctor for lacking claude.
+      let providerName = 'claude';
+      let providerBinary = 'claude';
+      try {
+        const cwd = program.opts().cwd || process.cwd();
+        const cfg = loadConfig({ cwd, configPath: program.opts().config });
+        providerName = cfg.provider || 'claude';
+        providerBinary =
+          providerName === 'codex' ? cfg.codex?.binary || 'codex' : cfg.claude?.binary || 'claude';
+      } catch {
+        /* fall back to claude defaults */
+      }
+      check(providerName, () => {
+        const bin = providerBinary.split(/\s+/)[0];
+        return execSync(bin, ['--version'], { encoding: 'utf8' }).trim();
       });
 
       // Non-fatal, but always visible: the pipeline's own wiring. External
@@ -808,7 +837,7 @@ export function createProgram() {
       if (resolvedConfig) {
         note('config', 'ok', resolvedConfig);
       } else {
-        note('config', 'WARN', `no ${PROJECT_CONFIG_NAME} resolved — run 'claude-rca init'`);
+        note('config', 'WARN', `no ${PROJECT_CONFIG_NAME} resolved — run '${cliName} init'`);
       }
 
       // Honour core.hooksPath: `--git-path hooks` returns the effective dir.
@@ -826,9 +855,9 @@ export function createProgram() {
       } else {
         const hookFile = pathJoin(hooksDir, 'post-commit');
         if (!fsExistsSync(hookFile)) {
-          note('hook', 'WARN', `no post-commit hook at ${hookFile} — run 'claude-rca init'`);
+          note('hook', 'WARN', `no post-commit hook at ${hookFile} — run '${cliName} init'`);
         } else if (!fsReadFileSync(hookFile, 'utf8').includes('claude-rca')) {
-          note('hook', 'WARN', `post-commit at ${hookFile} does not call claude-rca`);
+          note('hook', 'WARN', `post-commit at ${hookFile} is not an RCA hook`);
         } else {
           note('hook', 'ok', hookFile);
         }
@@ -843,7 +872,7 @@ export function createProgram() {
             note(
               'auto-gen',
               'WARN',
-              "false — set with 'claude-rca config --set auto_generate=true'",
+              `false — set with '${cliName} config --set auto_generate=true'`,
             );
           }
         } catch {
