@@ -473,7 +473,15 @@ export function createProgram() {
               }
               await deliverRca({ writtenPath, rca, context });
             } catch (commitErr) {
-              if (commitErr?.code === 'PROVIDER_ISOLATION_UNAVAILABLE') throw commitErr;
+              if (
+                [
+                  'PROVIDER_ISOLATION_UNAVAILABLE',
+                  'SECRET_SCAN_FAILED',
+                  'SECRET_SCANNER_UNAVAILABLE',
+                ].includes(commitErr?.code)
+              ) {
+                throw commitErr;
+              }
               process.stderr.write(`    ✖ skipped (${commitErr.message || String(commitErr)})\n`);
             }
           }

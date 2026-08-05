@@ -1,21 +1,30 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runAnalyst } from '../../src/analyst.mjs';
-import { installGitleaksStub, scannerRejectPayload } from '../fixtures/gitleaks-test-env.mjs';
+import {
+  installGitleaksStub,
+  scannerReceiptMarker,
+  scannerRejectPayload,
+} from '../fixtures/gitleaks-test-env.mjs';
 
 describe('runAnalyst provider security gate', () => {
   it('scans file contents and refuses isolation while ignoring public bypasses', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'rca-analyst-isolation-'));
     const writtenPath = join(dir, 'RCA-private-name.md');
     const promptPath = join(dir, 'analyst-prompt.md');
+    const receiptPath = join(dir, 'scanner-receipt.json');
     const originalPath = process.env.PATH;
     let injectedScanCalls = 0;
     let injectedSpawnCalls = 0;
-    writeFileSync(promptPath, `---\nname: analyst\n---\nAnalyst prompt sentinel`, 'utf8');
+    writeFileSync(
+      promptPath,
+      `---\nname: analyst\n---\nAnalyst prompt sentinel\n${scannerReceiptMarker(receiptPath)}`,
+      'utf8',
+    );
     writeFileSync(writtenPath, 'RCA document sentinel', 'utf8');
 
     try {
@@ -49,6 +58,12 @@ describe('runAnalyst provider security gate', () => {
 
       assert.strictEqual(injectedScanCalls, 0);
       assert.strictEqual(injectedSpawnCalls, 0);
+      const scanned = JSON.parse(readFileSync(receiptPath, 'utf8'));
+      assert.deepStrictEqual(Object.keys(scanned), ['systemPrompt', 'documentContent']);
+      assert.ok(scanned.systemPrompt.includes('Analyst prompt sentinel'));
+      assert.ok(!scanned.systemPrompt.includes('name: analyst'));
+      assert.strictEqual(scanned.documentContent, 'RCA document sentinel');
+      assert.ok(!JSON.stringify(scanned).includes(writtenPath));
     } finally {
       process.env.PATH = originalPath;
       rmSync(dir, { recursive: true, force: true });
