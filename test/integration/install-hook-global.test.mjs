@@ -12,27 +12,14 @@ import {
 import { delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { makeIsolatedGitEnv } from '../fixtures/isolated-git-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const INSTALLER = join(ROOT, 'hooks', 'install-hook.mjs');
 
 function makeSandbox(prefix, { globalHooksPath } = {}) {
-  const home = mkdtempSync(join(tmpdir(), `${prefix}-home-`));
-  const gitconfig = join(home, 'global.gitconfig');
-  const hooksConfig = globalHooksPath
-    ? `[core]\n\thooksPath = ${globalHooksPath.replaceAll('\\', '/')}\n`
-    : '';
-  const initialConfig = `${hooksConfig}[user]\n\tname = Isolated Test\n\temail = test@example.invalid\n`;
-  writeFileSync(gitconfig, initialConfig);
-  const env = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    GIT_CONFIG_GLOBAL: gitconfig,
-    GIT_TERMINAL_PROMPT: '0',
-  };
-  return { home, gitconfig, initialConfig, env };
+  return makeIsolatedGitEnv(prefix, { globalHooksPath, userName: 'Isolated Test' });
 }
 
 function makeRepo(env, { setLocalHooksPath = true } = {}) {

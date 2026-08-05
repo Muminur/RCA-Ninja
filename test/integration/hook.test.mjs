@@ -13,6 +13,7 @@ import { delimiter, join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { makeIsolatedGitEnv } from '../fixtures/isolated-git-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -31,42 +32,8 @@ function git(args, cwd, env) {
   }).trim();
 }
 
-function makeIsolatedGitEnv(prefix) {
-  const home = mkdtempSync(join(tmpdir(), `${prefix}-home-`));
-  const gitconfig = join(home, 'global.gitconfig');
-  writeFileSync(gitconfig, '[user]\n\tname = Test\n\temail = test@example.invalid\n');
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    const normalizedKey = key.toUpperCase();
-    if (
-      normalizedKey.startsWith('GIT_CONFIG_') ||
-      [
-        'HOME',
-        'USERPROFILE',
-        'XDG_CONFIG_HOME',
-        'GIT_DIR',
-        'GIT_WORK_TREE',
-        'GIT_COMMON_DIR',
-        'GIT_TEMPLATE_DIR',
-      ].includes(normalizedKey)
-    ) {
-      delete env[key];
-    }
-  }
-  return {
-    ...env,
-    HOME: home,
-    USERPROFILE: home,
-    XDG_CONFIG_HOME: join(home, 'xdg'),
-    GIT_CONFIG_GLOBAL: gitconfig,
-    GIT_CONFIG_NOSYSTEM: '1',
-    GIT_ATTR_NOSYSTEM: '1',
-    GIT_TERMINAL_PROMPT: '0',
-  };
-}
-
 function setupRepo(tmp) {
-  const env = makeIsolatedGitEnv('claude-rca-hook-setup');
+  const { env } = makeIsolatedGitEnv('claude-rca-hook-setup');
   git(['init', '-q', '-b', 'main'], tmp, env);
   git(['config', '--local', 'core.hooksPath', join(tmp, '.git', 'hooks')], tmp, env);
   git(['config', '--local', 'user.email', 'test@test.com'], tmp, env);
@@ -274,10 +241,12 @@ describe('hooks', () => {
   });
 
   it('install-hook.sh installs locally without invoking npm or mutating global config', () => {
-    const home = mkdtempSync(join(tmpdir(), 'claude-rca-hook-home-'));
-    const gitconfig = join(home, 'global.gitconfig');
-    const initialConfig = '[user]\n\tname = Test\n\temail = test@example.invalid\n';
-    writeFileSync(gitconfig, initialConfig);
+    const {
+      home,
+      gitconfig,
+      initialConfig,
+      env: isolatedEnv,
+    } = makeIsolatedGitEnv('claude-rca-hook-');
     const trapDir = join(home, 'trap-bin');
     const marker = join(home, 'npm-was-invoked');
     mkdirSync(trapDir, { recursive: true });
@@ -289,10 +258,7 @@ describe('hooks', () => {
       /* windows */
     }
     const env = {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      GIT_CONFIG_GLOBAL: gitconfig,
+      ...isolatedEnv,
       PATH:
         process.platform === 'win32'
           ? [
@@ -314,18 +280,10 @@ describe('hooks', () => {
   });
 
   it('install-hook.sh refuses an inherited global hooksPath without writing there', () => {
-    const home = mkdtempSync(join(tmpdir(), 'claude-rca-hook-inherited-home-'));
     const sharedHooks = mkdtempSync(join(tmpdir(), 'claude-rca-hook-shared-'));
-    const gitconfig = join(home, 'global.gitconfig');
-    const initialConfig = `[core]\n\thooksPath = ${sharedHooks.replaceAll('\\', '/')}\n`;
-    writeFileSync(gitconfig, initialConfig);
-    const env = {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      GIT_CONFIG_GLOBAL: gitconfig,
-      GIT_TERMINAL_PROMPT: '0',
-    };
+    const { gitconfig, initialConfig, env } = makeIsolatedGitEnv('claude-rca-hook-inherited-', {
+      globalHooksPath: sharedHooks,
+    });
     git(['config', '--local', '--unset', 'core.hooksPath'], tmp, env);
 
     const result = spawnSync(BASH, [INSTALL_HOOK, tmp], { cwd: tmp, encoding: 'utf8', env });
@@ -335,5 +293,35 @@ describe('hooks', () => {
     assert.strictEqual(existsSync(join(sharedHooks, 'post-commit')), false);
     assert.strictEqual(existsSync(join(sharedHooks, 'commit-msg')), false);
     assert.strictEqual(readFileSync(gitconfig, 'utf8'), initialConfig);
+  });
+
+  it('isolates installer execution from ambient Git command config', () => {
+    const sharedHooks = mkdtempSync(join(tmpdir(), 'claude-rca-hook-command-shared-'));
+    const injectedKeys = ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0'];
+    const originalEntries = Object.entries(process.env).filter(([key]) =>
+      injectedKeys.includes(key.toUpperCase()),
+    );
+
+    try {
+      process.env.GIT_CONFIG_COUNT = '1';
+      process.env.GIT_CONFIG_KEY_0 = 'core.hooksPath';
+      process.env.GIT_CONFIG_VALUE_0 = sharedHooks;
+      const { env } = makeIsolatedGitEnv('claude-rca-hook-command-');
+
+      const result = spawnSync(BASH, [INSTALL_HOOK, tmp], {
+        cwd: tmp,
+        encoding: 'utf8',
+        env,
+      });
+
+      assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+      assert.strictEqual(existsSync(join(sharedHooks, 'post-commit')), false);
+      assert.strictEqual(existsSync(join(sharedHooks, 'commit-msg')), false);
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (injectedKeys.includes(key.toUpperCase())) delete process.env[key];
+      }
+      for (const [key, value] of originalEntries) process.env[key] = value;
+    }
   });
 });

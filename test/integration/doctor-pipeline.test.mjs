@@ -13,6 +13,7 @@ import { delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { pathWithoutGitleaks } from '../fixtures/gitleaks-test-env.mjs';
+import { makeIsolatedGitEnv } from '../fixtures/isolated-git-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -20,19 +21,7 @@ const BIN = join(ROOT, 'bin', 'claude-rca');
 const POST_COMMIT = join(ROOT, 'hooks', 'post-commit');
 
 function makeIsolatedEnv(prefix, { globalHooksPath } = {}) {
-  const home = mkdtempSync(join(tmpdir(), `${prefix}-home-`));
-  const gitconfig = join(home, 'global.gitconfig');
-  const hooksConfig = globalHooksPath
-    ? `[core]\n\thooksPath = ${globalHooksPath.replaceAll('\\', '/')}\n`
-    : '';
-  writeFileSync(gitconfig, `${hooksConfig}[user]\n\tname = Test\n\temail = test@example.invalid\n`);
-  return {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    GIT_CONFIG_GLOBAL: gitconfig,
-    GIT_TERMINAL_PROMPT: '0',
-  };
+  return makeIsolatedGitEnv(prefix, { globalHooksPath }).env;
 }
 
 function git(args, cwd, env) {
@@ -211,7 +200,29 @@ describe('doctor checks the RCA pipeline itself', () => {
 
     const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
 
-    assert.match(stdout, /^hook\s+WARN\s+.*inherited core\.hooksPath/im);
+    assert.match(stdout, /^hook\s+WARN\s+.*not repository-local/im);
+    assert.doesNotMatch(stdout, /^hook\s+ok/m);
+    assert.match(stdout, /^auto-gen\s+FAIL\s+.*local hook/im);
+  });
+
+  it('rejects an RCA hook injected through command-scope core.hooksPath', () => {
+    const sharedHooks = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-command-hooks-'));
+    copyFileSync(POST_COMMIT, join(sharedHooks, 'post-commit'));
+    const { repo, env } = makeRepo('claude-rca-doc-command-hook-');
+    writeFileSync(
+      join(repo, '.claude-rca.json'),
+      JSON.stringify({ version: 1, auto_generate: true }),
+    );
+
+    const { stdout } = runDoctor(repo, {
+      ...env,
+      PATH: pathWithoutGitleaks(),
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.hooksPath',
+      GIT_CONFIG_VALUE_0: sharedHooks,
+    });
+
+    assert.match(stdout, /^hook\s+WARN\s+.*not repository-local/im);
     assert.doesNotMatch(stdout, /^hook\s+ok/m);
     assert.match(stdout, /^auto-gen\s+FAIL\s+.*local hook/im);
   });
