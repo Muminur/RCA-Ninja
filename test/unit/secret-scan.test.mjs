@@ -180,6 +180,32 @@ describe('secret scanner', () => {
     assert.strictEqual(invoked, false);
   });
 
+  it('maps omitted options to a static scan-failed error', async () => {
+    await assert.rejects(
+      () => scanProviderPayload(),
+      (error) => {
+        assert.ok(error instanceof RcaError);
+        assert.strictEqual(error.code, 'SECRET_SCAN_FAILED');
+        assert.strictEqual(error.message, 'The secret scanner blocked provider execution.');
+        assert.deepStrictEqual(error.context, {});
+        return true;
+      },
+    );
+  });
+
+  it('maps null options to a static scan-failed error', async () => {
+    await assert.rejects(
+      () => scanProviderPayload(null),
+      (error) => {
+        assert.ok(error instanceof RcaError);
+        assert.strictEqual(error.code, 'SECRET_SCAN_FAILED');
+        assert.strictEqual(error.message, 'The secret scanner blocked provider execution.');
+        assert.deepStrictEqual(error.context, {});
+        return true;
+      },
+    );
+  });
+
   it('resolves when gitleaks succeeds', async () => {
     await assert.doesNotReject(() =>
       scanProviderPayload({

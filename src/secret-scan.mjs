@@ -32,7 +32,12 @@ export function buildScannerEnv(sourceEnv) {
   return safeEnv;
 }
 
-export async function scanProviderPayload({ payload, _runFn = run }) {
+export async function scanProviderPayload(options) {
+  if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+    throw new RcaError('SECRET_SCAN_FAILED');
+  }
+
+  const { payload, _runFn = run } = options;
   if (typeof payload !== 'string') {
     throw new RcaError('SECRET_SCAN_FAILED');
   }
