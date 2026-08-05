@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createProgram } from '../../src/cli.mjs';
@@ -34,6 +37,44 @@ describe('setup command', () => {
         cmd.description().toLowerCase().includes('configure'),
       `description should describe the wizard: "${cmd.description()}"`,
     );
+  });
+
+  it('keeps automatic generation disabled until provider isolation is available', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-setup-isolation-'));
+    try {
+      const child = spawn('node', [BIN, '--cwd', dir, 'setup'], {
+        cwd: ROOT,
+        env: { ...process.env, HOME: dir, USERPROFILE: dir },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      let responseStage = 0;
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+        if (responseStage === 0 && stderr.includes('Use this vault?')) {
+          responseStage = 1;
+          child.stdin.write('n\n');
+        } else if (responseStage === 0 && stderr.includes('Enter vault path')) {
+          responseStage = 2;
+          child.stdin.write('\n');
+        } else if (responseStage === 1 && stderr.includes('Enter vault path')) {
+          responseStage = 2;
+          child.stdin.write('\n');
+        } else if (responseStage === 2 && stderr.includes('Enable Obsidian REST API sync?')) {
+          responseStage = 3;
+          child.stdin.end('\n');
+        }
+      });
+      const [status] = await once(child, 'close');
+      assert.strictEqual(status, 0, stderr);
+      const config = JSON.parse(readFileSync(join(dir, '.claude-rca.json'), 'utf8'));
+      assert.strictEqual(config.auto_generate, false);
+      assert.ok(/auto_generate:\s+false/i.test(stderr));
+      assert.ok(/isolation.*unavailable|unavailable.*isolation/i.test(stderr));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('setup command source never writes api_key to .claude-rca.json', async () => {

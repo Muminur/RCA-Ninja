@@ -5,7 +5,14 @@ export const name = 'claude';
 export const defaultBinary = 'claude';
 
 function extractRca(stdout) {
-  const parsed = JSON.parse(stdout);
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new RcaError('SCHEMA_VALIDATION', {
+      ajv_first_error: 'Could not parse RCA JSON from claude output',
+    });
+  }
   let rcaData = parsed.structured_output;
 
   if (!rcaData && parsed.result) {
@@ -13,9 +20,9 @@ function extractRca(stdout) {
     const raw = jsonMatch ? jsonMatch[1].trim() : parsed.result.trim();
     try {
       rcaData = JSON.parse(raw);
-    } catch (parseErr) {
+    } catch {
       throw new RcaError('SCHEMA_VALIDATION', {
-        ajv_first_error: `Could not parse RCA JSON from claude output: ${parseErr.message}`,
+        ajv_first_error: 'Could not parse RCA JSON from claude output',
       });
     }
   }
@@ -85,7 +92,14 @@ export function buildAnalystInvocation({ config, payload, workspaceDir }) {
     input: prompt,
     timeoutMs: c.timeout_ms || 60000,
     extractVerdict: (stdout) => {
-      const parsed = JSON.parse(stdout);
+      let parsed;
+      try {
+        parsed = JSON.parse(stdout);
+      } catch {
+        throw new RcaError('SCHEMA_VALIDATION', {
+          ajv_first_error: 'Could not parse analyst JSON from claude output',
+        });
+      }
       const output = parsed?.structured_output || parsed;
       return { verdict: output?.verdict, findings: output?.findings || '' };
     },

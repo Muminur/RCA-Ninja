@@ -158,6 +158,55 @@ describe('claude adapter — buildGenerateInvocation', () => {
     assert.strictEqual(out.cost, 0.5);
     assert.strictEqual(out.sessionId, 's1');
   });
+
+  it('returns only a static parse error for malformed provider output', () => {
+    const inv = claude.buildGenerateInvocation({
+      config: {},
+      payload: '{}',
+      schemaStr: RCA_SCHEMA_STR,
+      workspaceDir: tmpdir(),
+    });
+    const sensitiveText = 'private provider output must not appear';
+
+    for (const output of [sensitiveText, JSON.stringify({ result: sensitiveText })]) {
+      assert.throws(
+        () => inv.extractRca(output),
+        (error) => {
+          assert.strictEqual(error.code, 'SCHEMA_VALIDATION');
+          assert.strictEqual(
+            error.context.ajv_first_error,
+            'Could not parse RCA JSON from claude output',
+          );
+          assert.ok(!error.message.includes(sensitiveText));
+          assert.ok(!JSON.stringify(error.context).includes(sensitiveText));
+          return true;
+        },
+      );
+    }
+  });
+
+  it('returns only a static parse error for malformed analyst output', () => {
+    const inv = claude.buildAnalystInvocation({
+      config: {},
+      payload: '{}',
+      workspaceDir: tmpdir(),
+    });
+    const sensitiveText = 'PRIVATE_PROVIDER_ANALYST_OUTPUT';
+
+    assert.throws(
+      () => inv.extractVerdict(sensitiveText),
+      (error) => {
+        assert.strictEqual(error.code, 'SCHEMA_VALIDATION');
+        assert.strictEqual(
+          error.context.ajv_first_error,
+          'Could not parse analyst JSON from claude output',
+        );
+        assert.ok(!error.message.includes(sensitiveText));
+        assert.ok(!JSON.stringify(error.context).includes(sensitiveText));
+        return true;
+      },
+    );
+  });
 });
 
 describe('codex adapter — buildGenerateInvocation', () => {

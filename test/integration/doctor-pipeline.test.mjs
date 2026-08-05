@@ -52,7 +52,7 @@ describe('doctor checks the RCA pipeline itself', () => {
     assert.ok(/^hook\s+WARN/m.test(stdout), `hook must be reported WARN, got:\n${stdout}`);
   });
 
-  it('passes both checks for a properly wired repo and reports auto_generate', () => {
+  it('reports configured auto-generation as unsafe while provider isolation is unavailable', () => {
     const repo = makeRepo('claude-rca-doc-ok-');
     writeFileSync(
       join(repo, '.claude-rca.json'),
@@ -62,13 +62,18 @@ describe('doctor checks the RCA pipeline itself', () => {
     mkdirSync(hooksDir, { recursive: true });
     copyFileSync(POST_COMMIT, join(hooksDir, 'post-commit'));
 
-    const { stdout } = runDoctor(repo);
+    const { stdout, status } = runDoctor(repo);
     assert.ok(/^config\s+ok/m.test(stdout), `config must pass, got:\n${stdout}`);
     assert.ok(/^hook\s+ok/m.test(stdout), `hook must pass, got:\n${stdout}`);
     assert.ok(
-      /^auto-gen\s+ok\s+.*(true|on|enabled)/im.test(stdout),
-      `auto_generate state must be reported, got:\n${stdout}`,
+      /^provider-isolation\s+FAIL\s+.*(unavailable|no approved.*available)/im.test(stdout),
+      `provider isolation refusal must be reported, got:\n${stdout}`,
     );
+    assert.ok(
+      /^auto-gen\s+FAIL\s+.*(unsafe|unavailable|disabled)/im.test(stdout),
+      `unsafe auto_generate state must not report ok, got:\n${stdout}`,
+    );
+    assert.strictEqual(status, 70);
   });
 
   it('reports auto_generate off as a WARN, not a silent pass', () => {
@@ -85,6 +90,14 @@ describe('doctor checks the RCA pipeline itself', () => {
     assert.ok(
       /^auto-gen\s+WARN/m.test(stdout),
       `auto_generate=false must be visible as WARN, got:\n${stdout}`,
+    );
+    assert.ok(
+      /^auto-gen\s+WARN\s+.*(unavailable|disabled)/im.test(stdout),
+      `safe disabled state must explain provider unavailability, got:\n${stdout}`,
+    );
+    assert.ok(
+      !stdout.includes('config --set auto_generate=true'),
+      `doctor must not recommend unsafe enablement, got:\n${stdout}`,
     );
   });
 

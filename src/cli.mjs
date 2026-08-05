@@ -214,9 +214,12 @@ export function createProgram() {
           }
         }
 
-        // Step 4: Set auto_generate=true
-        setConfigValue(configPath, 'auto_generate', 'true');
-        process.stderr.write(`✓ set auto_generate=true\n`);
+        // Step 4: Keep automatic generation disabled until an approved
+        // provider isolation boundary is implemented.
+        setConfigValue(configPath, 'auto_generate', 'false');
+        process.stderr.write(
+          `⚠ set auto_generate=false — provider isolation is unavailable; automatic generation is unsafe\n`,
+        );
 
         // Step 5: Set obsidian.enabled=true with vault path
         if (vaultPath) {
@@ -271,6 +274,9 @@ export function createProgram() {
         doctorCheck(setupProvider, () =>
           execSync(setupBinary.split(/\s+/)[0], ['--version'], { encoding: 'utf8' }).trim(),
         );
+        doctorCheck('provider-isolation', () => {
+          throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+        });
 
         const maxName = Math.max(...doctorChecks.map((c) => c.name.length));
         for (const c of doctorChecks) {
@@ -280,7 +286,7 @@ export function createProgram() {
         // Step 7: Print summary
         process.stderr.write('\n--- Setup complete ---\n');
         process.stderr.write(`  Config:       ${configPath}\n`);
-        process.stderr.write(`  auto_generate: true\n`);
+        process.stderr.write(`  auto_generate: false (provider isolation unavailable)\n`);
         if (vaultPath) {
           process.stderr.write(`  Vault:        ${vaultPath}\n`);
         } else {
@@ -467,6 +473,7 @@ export function createProgram() {
               }
               await deliverRca({ writtenPath, rca, context });
             } catch (commitErr) {
+              if (commitErr?.code === 'PROVIDER_ISOLATION_UNAVAILABLE') throw commitErr;
               process.stderr.write(`    ✖ skipped (${commitErr.message || String(commitErr)})\n`);
             }
           }
@@ -833,6 +840,10 @@ export function createProgram() {
         return execSync(bin, ['--version'], { encoding: 'utf8' }).trim();
       });
 
+      check('provider-isolation', () => {
+        throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+      });
+
       // Non-fatal, but always visible: the pipeline's own wiring. External
       // tools being healthy told us nothing about whether RCAs were actually
       // being produced — a dead pipeline reported a clean bill of health.
@@ -875,12 +886,17 @@ export function createProgram() {
         try {
           const autoCfg = loadConfig({ cwd: doctorCwd, configPath: program.opts().config });
           if (autoCfg.auto_generate === true) {
-            note('auto-gen', 'ok', 'true — fix: commits generate RCAs automatically');
+            failures++;
+            note(
+              'auto-gen',
+              'FAIL',
+              'unsafe — provider isolation is unavailable; automatic generation cannot run',
+            );
           } else {
             note(
               'auto-gen',
               'WARN',
-              `false — set with '${cliName} config --set auto_generate=true'`,
+              'disabled — provider isolation is unavailable; automatic generation cannot run',
             );
           }
         } catch {
