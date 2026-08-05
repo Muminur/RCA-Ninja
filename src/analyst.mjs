@@ -1,8 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import matter from 'gray-matter';
 import { run } from './util/exec.mjs';
 import { RcaError } from './errors.mjs';
 import { getProvider } from './providers/index.mjs';
+import { scanProviderPayload } from './secret-scan.mjs';
 
 function stripFrontmatter(content) {
   try {
@@ -24,23 +27,40 @@ function stripFrontmatter(content) {
  *   writtenPath: string,
  *   systemPromptPath: string,
  *   config: object,
+ *   _scanFn?: (opts: {payload: string}) => Promise<void>,
  *   _spawnFn?: (cmd: string, argv: string[], opts: object) => Promise<{stdout: string}>
  * }} opts
  * @returns {Promise<{ verdict: 'PUBLISH'|'REVISE'|'REJECT', findings: string }>}
  */
-export async function runAnalyst({ writtenPath, systemPromptPath, config, _spawnFn }) {
-  const systemPromptRaw = readFileSync(systemPromptPath, 'utf8');
+export async function runAnalyst({ writtenPath, systemPromptPath, config, _scanFn, _spawnFn }) {
+  let systemPromptRaw;
+  let documentContent;
+  try {
+    systemPromptRaw = readFileSync(systemPromptPath, 'utf8');
+    documentContent = readFileSync(writtenPath, 'utf8');
+  } catch {
+    throw new RcaError('DISK_ERROR', {
+      op: 'reading analyst input',
+      errno: 'unavailable',
+    });
+  }
   const systemPrompt = stripFrontmatter(systemPromptRaw);
-
-  const provider = getProvider(config?.provider);
-  const inv = provider.buildAnalystInvocation({ config, systemPrompt, writtenPath });
+  const payload = JSON.stringify({ systemPrompt, documentContent });
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'codex-rca-provider-'));
 
   const spawnFn = _spawnFn || ((c, a, o) => run(c, a, o));
+  const scanFn = _scanFn || scanProviderPayload;
+  let inv;
 
   try {
+    const provider = getProvider(config?.provider);
+    inv = provider.buildAnalystInvocation({ config, payload, workspaceDir });
     let stdout;
+    await scanFn({ payload });
     try {
       const result = await spawnFn(inv.cmd, inv.argv, {
+        cwd: inv.cwd,
+        env: inv.env,
         timeoutMs: inv.timeoutMs,
         input: inv.input,
       });
@@ -68,6 +88,11 @@ export async function runAnalyst({ writtenPath, systemPromptPath, config, _spawn
 
     return { verdict, findings };
   } finally {
-    inv.cleanup?.();
+    inv?.cleanup?.();
+    try {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    } catch {
+      /* cleanup */
+    }
   }
 }

@@ -1,12 +1,12 @@
-import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomUUID } from 'node:crypto';
 import { run } from './util/exec.mjs';
 import { validateRca } from './schema.mjs';
 import { RcaError } from './errors.mjs';
 import { estimatePayload, TOKEN_WARN_THRESHOLD, TOKEN_HARD_LIMIT } from './token-estimate.mjs';
 import { getProvider } from './providers/index.mjs';
+import { scanProviderPayload } from './secret-scan.mjs';
 
 const SECRET_REGEX = new RegExp(
   [
@@ -38,6 +38,22 @@ export function buildContextPayload({ context, priorRcas, diffFile }) {
   };
 }
 
+export function buildGenerationPayload({
+  systemPrompt,
+  schema,
+  context,
+  priorRcas,
+  correctionHint,
+}) {
+  return JSON.stringify({
+    systemPrompt,
+    schema,
+    context,
+    priorRcas: priorRcas ?? null,
+    correctionHint: correctionHint ?? null,
+  });
+}
+
 /**
  * Run generation through a single named provider (claude or codex): build the
  * invocation, run it with schema-validation retries, then post-process and
@@ -46,25 +62,24 @@ export function buildContextPayload({ context, priorRcas, diffFile }) {
  */
 async function runProviderGenerate(
   providerName,
-  { config, context, contextFile, diffFile, systemPrompt, schema, correctionHint, priorRcas },
+  { config, context, schema, payload, workspaceDir, scanFn, runFn },
 ) {
   const provider = getProvider(providerName);
   const inv = provider.buildGenerateInvocation({
     config,
-    contextFile,
-    diffFile,
-    systemPrompt,
     schemaStr: schema,
-    correctionHint,
-    context,
-    priorRcas,
+    payload,
+    workspaceDir,
   });
 
   try {
     let lastError;
     for (let attempt = 0; attempt <= inv.maxRetries; attempt++) {
       try {
-        const { stdout } = await run(inv.cmd, inv.argv, {
+        await scanFn({ payload });
+        const { stdout } = await runFn(inv.cmd, inv.argv, {
+          cwd: inv.cwd,
+          env: inv.env,
           timeoutMs: inv.timeoutMs,
           input: inv.input,
         });
@@ -149,6 +164,9 @@ async function runProviderGenerate(
         }
       } catch (err) {
         lastError = err;
+        if (err.code === 'SECRET_SCANNER_UNAVAILABLE' || err.code === 'SECRET_SCAN_FAILED') {
+          throw err;
+        }
         if (err.code === 'SCHEMA_VALIDATION' && attempt < inv.maxRetries) {
           continue;
         }
@@ -176,21 +194,23 @@ export async function generate({
   schemaPath,
   correctionHint,
   priorRcas,
+  _scanFn,
+  _runFn,
 }) {
-  const contextFile = join(tmpdir(), `claude-rca-ctx-${randomUUID()}.json`);
-  const diffFile = join(tmpdir(), `claude-rca-diff-${randomUUID()}.txt`);
+  let workspaceDir;
 
   try {
-    writeFileSync(
-      contextFile,
-      JSON.stringify(buildContextPayload({ context, priorRcas, diffFile })),
-    );
-    writeFileSync(diffFile, context.diff);
-
     const systemPrompt = readFileSync(systemPromptPath, 'utf8');
     const schema = readFileSync(schemaPath, 'utf8');
+    const payload = buildGenerationPayload({
+      systemPrompt,
+      schema,
+      context,
+      priorRcas,
+      correctionHint,
+    });
 
-    const contextJsonStr = JSON.stringify(buildContextPayload({ context, priorRcas, diffFile }));
+    const contextJsonStr = JSON.stringify(context);
     const estimate = estimatePayload({
       systemPrompt,
       schema,
@@ -211,15 +231,16 @@ export async function generate({
     }
     process.stderr.write(`INFO: estimated_tokens=${estimate.total}\n`);
 
+    workspaceDir = mkdtempSync(join(tmpdir(), 'codex-rca-provider-'));
+
     const runOpts = {
       config,
       context,
-      contextFile,
-      diffFile,
-      systemPrompt,
       schema,
-      correctionHint,
-      priorRcas,
+      payload,
+      workspaceDir,
+      scanFn: _scanFn || scanProviderPayload,
+      runFn: _runFn || run,
     };
 
     // Run the configured provider. On a non-schema failure of the default
@@ -232,7 +253,13 @@ export async function generate({
     try {
       return await runProviderGenerate(primaryName, runOpts);
     } catch (primaryErr) {
-      if (primaryErr.code === 'SCHEMA_VALIDATION') throw primaryErr;
+      if (
+        primaryErr.code === 'SCHEMA_VALIDATION' ||
+        primaryErr.code === 'SECRET_SCANNER_UNAVAILABLE' ||
+        primaryErr.code === 'SECRET_SCAN_FAILED'
+      ) {
+        throw primaryErr;
+      }
       if (primaryName === 'claude' && config.codex) {
         process.stderr.write('WARN: claude generation failed; falling back to codex.\n');
         return await runProviderGenerate('codex', runOpts);
@@ -240,15 +267,12 @@ export async function generate({
       throw primaryErr;
     }
   } finally {
-    try {
-      unlinkSync(contextFile);
-    } catch {
-      /* cleanup */
-    }
-    try {
-      unlinkSync(diffFile);
-    } catch {
-      /* cleanup */
+    if (workspaceDir !== undefined) {
+      try {
+        rmSync(workspaceDir, { recursive: true, force: true });
+      } catch {
+        /* cleanup */
+      }
     }
   }
 }

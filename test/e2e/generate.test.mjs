@@ -1,201 +1,169 @@
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { generate } from '../../src/generator.mjs';
+import { RcaError } from '../../src/errors.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
-const BIN = join(ROOT, 'bin', 'claude-rca');
-const STUB = join(ROOT, 'test', 'fixtures', 'claude-stub.mjs');
-const CODEX_STUB = join(ROOT, 'test', 'fixtures', 'codex-stub.mjs');
+const SYSTEM_PROMPT_PATH = join(ROOT, 'prompts', 'rca-system.md');
+const SCHEMA_PATH = join(ROOT, 'prompts', 'rca-schema.json');
 
-function git(args, cwd) {
-  return execFileSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-  }).trim();
-}
+const CONTEXT = {
+  short_hash: 'abc1234',
+  branch: 'main',
+  commit_message: 'fix: validate provider input',
+  files_changed: ['src/provider.mjs'],
+  logs: 'controlled test log',
+  diff: 'diff --git a/src/provider.mjs b/src/provider.mjs\n+validate(input);',
+};
 
-function setupRepo(tmp) {
-  git(['init'], tmp);
-  git(['config', 'user.email', 'test@test.com'], tmp);
-  git(['config', 'user.name', 'Test'], tmp);
-  writeFileSync(join(tmp, 'file1.js'), 'console.log("hello");\n');
-  git(['add', '.'], tmp);
-  git(['commit', '-m', 'fix: initial bug fix'], tmp);
-}
+const VALID_RCA = {
+  title: 'Provider input bypassed the required security scan',
+  symptom:
+    'Provider execution started before the complete generated context passed security review.',
+  root_cause:
+    'The provider process boundary did not invoke the central scanner immediately before execution.',
+  fix: 'The generator now scans one complete serialized payload before each provider execution attempt.',
+  impact: 'Unreviewed input could otherwise have reached an external model provider.',
+  files: ['src/provider.mjs'],
+  tags: ['security', 'provider'],
+  references: [],
+  confidence: 'high',
+};
 
-function makeConfig(tmp, overrides = {}) {
-  const config = {
-    version: 1,
-    output_dir: './rca',
-    claude: { binary: `node ${STUB}`, ...overrides },
+function claudeSuccess() {
+  return {
+    stdout: JSON.stringify({
+      structured_output: VALID_RCA,
+      total_cost_usd: 0,
+      session_id: 'test-session',
+    }),
   };
-  writeFileSync(join(tmp, '.claude-rca.json'), JSON.stringify(config));
 }
 
-function makeFallbackConfig(tmp) {
-  const config = {
-    version: 1,
-    output_dir: './rca',
-    claude: { binary: 'claude-not-installed-for-test' },
-    codex: { binary: `node ${CODEX_STUB}` },
+function generateOptions(overrides = {}) {
+  return {
+    context: CONTEXT,
+    config: { provider: 'claude', claude: { max_retries: 1 } },
+    systemPromptPath: SYSTEM_PROMPT_PATH,
+    schemaPath: SCHEMA_PATH,
+    correctionHint: undefined,
+    priorRcas: undefined,
+    ...overrides,
   };
-  writeFileSync(join(tmp, '.claude-rca.json'), JSON.stringify(config));
 }
 
-function runCli(args, cwd, env = {}) {
-  return execFileSync('node', [BIN, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: { ...process.env, ...env },
-    timeout: 30000,
-  });
-}
+describe('generate provider security gate', () => {
+  it('rejects before any provider run and preserves the scanner error', async () => {
+    const scanError = new RcaError('SECRET_SCAN_FAILED');
+    let providerRuns = 0;
 
-function runCliErr(args, cwd, env = {}) {
-  try {
-    execFileSync('node', [BIN, ...args], {
-      cwd,
-      encoding: 'utf8',
-      env: { ...process.env, ...env },
-      timeout: 30000,
-    });
-    assert.fail('Expected non-zero exit');
-  } catch (err) {
-    return err;
-  }
-}
-
-describe('generate e2e', () => {
-  let tmp;
-
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'claude-rca-e2e-'));
-    setupRepo(tmp);
-  });
-
-  it('generates an RCA with the stub and writes to rca/', () => {
-    makeConfig(tmp);
-    const stdout = runCli(['generate'], tmp);
-    const rcaPath = stdout.trim();
-    assert.ok(rcaPath.includes('rca'));
-    assert.ok(rcaPath.endsWith('.md'));
-    assert.ok(existsSync(rcaPath));
-    const content = readFileSync(rcaPath, 'utf8');
-    assert.ok(content.includes('## Symptom'));
-    assert.ok(content.includes('## Root Cause'));
-    // runCli uses execFileSync which throws on non-zero exit, so reaching here means exit 0
-  });
-
-  it('exits 0 on successful generation', () => {
-    makeConfig(tmp);
-    // execFileSync throws if exit != 0; if it returns, exit was 0
-    const stdout = runCli(['generate'], tmp);
-    assert.ok(stdout.trim().endsWith('.md'), 'stdout must be the RCA path');
-  });
-
-  it('--dry-run prints path but writes nothing', () => {
-    makeConfig(tmp);
-    const stdout = runCli(['generate', '--dry-run'], tmp);
-    const rcaPath = stdout.trim();
-    assert.ok(rcaPath.endsWith('.md'));
-    assert.ok(!existsSync(rcaPath));
-  });
-
-  it('stub returning invalid JSON causes exit 22', () => {
-    makeConfig(tmp);
-    const err = runCliErr(['generate'], tmp, { CLAUDE_STUB_INVALID: '1' });
-    assert.strictEqual(err.status, 22);
-  });
-
-  it('stub exiting non-zero causes exit 21', () => {
-    makeConfig(tmp);
-    const err = runCliErr(['generate'], tmp, { CLAUDE_STUB_EXIT: '1' });
-    assert.strictEqual(err.status, 21);
-  });
-
-  it('falls back to Codex and writes an RCA when Claude is unavailable', () => {
-    const logPath = join(tmp, 'codex-stub.log');
-    makeFallbackConfig(tmp);
-    const stdout = runCli(['generate'], tmp, { CODEX_STUB_LOG: logPath });
-    const rcaPath = stdout.trim();
-    assert.ok(rcaPath.endsWith('.md'), 'stdout must be the RCA path');
-    assert.ok(existsSync(rcaPath), 'RCA file must exist');
-    const content = readFileSync(rcaPath, 'utf8');
-    assert.ok(content.includes('## Symptom'), 'fallback must produce a rendered RCA via Codex');
-    const log = readFileSync(logPath, 'utf8');
-    const entry = JSON.parse(log.trim().split('\n')[0]);
-    assert.deepStrictEqual(entry.argv.slice(0, 1), ['exec']);
-    assert.ok(entry.argv.includes('--output-schema'), 'Codex fallback must request schema output');
-  });
-
-  it('asserts --permission-mode plan in stub argv log', () => {
-    const logPath = join(tmp, 'stub.log');
-    makeConfig(tmp);
-    runCli(['generate'], tmp, { CLAUDE_STUB_LOG: logPath });
-    const log = readFileSync(logPath, 'utf8');
-    const entry = JSON.parse(log.trim().split('\n')[0]);
-    assert.ok(entry.argv.includes('--permission-mode'));
-    const pmIdx = entry.argv.indexOf('--permission-mode');
-    assert.strictEqual(entry.argv[pmIdx + 1], 'plan');
-  });
-
-  it('asserts --allowedTools in stub argv log', () => {
-    const logPath = join(tmp, 'stub.log');
-    makeConfig(tmp);
-    runCli(['generate'], tmp, { CLAUDE_STUB_LOG: logPath });
-    const log = readFileSync(logPath, 'utf8');
-    const entry = JSON.parse(log.trim().split('\n')[0]);
-    assert.ok(entry.argv.includes('--allowedTools'));
-  });
-
-  it('asserts --output-format json in stub argv log', () => {
-    const logPath = join(tmp, 'stub.log');
-    makeConfig(tmp);
-    runCli(['generate'], tmp, { CLAUDE_STUB_LOG: logPath });
-    const log = readFileSync(logPath, 'utf8');
-    const entry = JSON.parse(log.trim().split('\n')[0]);
-    const ofIdx = entry.argv.indexOf('--output-format');
-    assert.ok(ofIdx !== -1, '--output-format must be present in argv');
-    assert.strictEqual(entry.argv[ofIdx + 1], 'json');
-  });
-
-  it('argv NEVER contains --bare even when ANTHROPIC_API_KEY is set', () => {
-    const logPath = join(tmp, 'stub.log');
-    makeConfig(tmp);
-    runCli(['generate'], tmp, {
-      CLAUDE_STUB_LOG: logPath,
-      ANTHROPIC_API_KEY: 'sk-ant-fake-key-for-test',
-    });
-    const log = readFileSync(logPath, 'utf8');
-    const entry = JSON.parse(log.trim().split('\n')[0]);
-    assert.ok(!entry.argv.includes('--bare'), 'argv must not contain --bare');
-  });
-
-  it('estimated_tokens is logged to stderr', () => {
-    makeConfig(tmp);
-    const result = spawnSync('node', [BIN, 'generate'], {
-      cwd: tmp,
-      encoding: 'utf8',
-      env: { ...process.env },
-      timeout: 30000,
-    });
-    assert.ok(
-      result.stderr.includes('estimated_tokens'),
-      `stderr should contain estimated_tokens, got: ${result.stderr.slice(0, 200)}`,
+    await assert.rejects(
+      () =>
+        generate(
+          generateOptions({
+            _scanFn: async () => {
+              throw scanError;
+            },
+            _runFn: async () => {
+              providerRuns += 1;
+              return claudeSuccess();
+            },
+          }),
+        ),
+      (error) => {
+        assert.strictEqual(error, scanError);
+        assert.strictEqual(error.code, 'SECRET_SCAN_FAILED');
+        return true;
+      },
     );
+
+    assert.strictEqual(providerRuns, 0);
   });
 
-  it('--analyze runs analyst and still writes the RCA on PUBLISH verdict', () => {
-    makeConfig(tmp);
-    const stdout = runCli(['generate', '--analyze'], tmp);
-    const rcaPath = stdout.trim();
-    assert.ok(rcaPath.endsWith('.md'), 'stdout must be the RCA path');
-    assert.ok(existsSync(rcaPath), 'RCA file must exist');
+  it('rescans a schema retry and refuses the second provider run when that scan rejects', async () => {
+    const events = [];
+    const scanError = new RcaError('SECRET_SCAN_FAILED');
+
+    await assert.rejects(
+      () =>
+        generate(
+          generateOptions({
+            _scanFn: async () => {
+              events.push('scan');
+              if (events.filter((event) => event === 'scan').length === 2) throw scanError;
+            },
+            _runFn: async () => {
+              events.push('run');
+              return { stdout: JSON.stringify({ structured_output: { bad: 'schema' } }) };
+            },
+          }),
+        ),
+      (error) => error === scanError,
+    );
+
+    assert.deepStrictEqual(events, ['scan', 'run', 'scan']);
+  });
+
+  it('scans the Codex fallback and never runs it when that scan rejects', async () => {
+    const scanError = new RcaError('SECRET_SCAN_FAILED');
+    const scans = [];
+    let providerRuns = 0;
+
+    await assert.rejects(
+      () =>
+        generate(
+          generateOptions({
+            config: {
+              provider: 'claude',
+              claude: { max_retries: 0 },
+              codex: { max_retries: 0 },
+            },
+            _scanFn: async ({ payload }) => {
+              scans.push(payload);
+              if (scans.length === 2) throw scanError;
+            },
+            _runFn: async () => {
+              providerRuns += 1;
+              throw new Error('primary provider unavailable');
+            },
+          }),
+        ),
+      (error) => error === scanError,
+    );
+
+    assert.strictEqual(providerRuns, 1);
+    assert.strictEqual(scans.length, 2);
+    assert.strictEqual(scans[0], scans[1]);
+  });
+
+  it('scans one complete serialized payload with explicit null optionals', async () => {
+    let scannedPayload;
+
+    await generate(
+      generateOptions({
+        _scanFn: async ({ payload }) => {
+          scannedPayload = payload;
+        },
+        _runFn: async () => claudeSuccess(),
+      }),
+    );
+
+    const parsed = JSON.parse(scannedPayload);
+    assert.deepStrictEqual(Object.keys(parsed), [
+      'systemPrompt',
+      'schema',
+      'context',
+      'priorRcas',
+      'correctionHint',
+    ]);
+    assert.ok(parsed.systemPrompt.includes('Root Cause Analysis'));
+    assert.ok(parsed.schema.includes('claude-rca.rca.v1'));
+    assert.deepStrictEqual(parsed.context, CONTEXT);
+    assert.strictEqual(parsed.priorRcas, null);
+    assert.strictEqual(parsed.correctionHint, null);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -37,13 +37,17 @@ Login requests failing.
   return path;
 }
 
+function runAnalystWithAllowedScan(options) {
+  return runAnalyst({ ...options, _scanFn: async () => {} });
+}
+
 describe('runAnalyst', () => {
   it('returns an object with verdict and findings properties', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-'));
     try {
       const rcaPath = makeFakeRcaFile(dir);
       const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
-      const result = await runAnalyst({
+      const result = await runAnalystWithAllowedScan({
         writtenPath: rcaPath,
         systemPromptPath,
         config: {},
@@ -72,7 +76,7 @@ describe('runAnalyst', () => {
     try {
       const rcaPath = makeFakeRcaFile(dir);
       const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
-      const result = await runAnalyst({
+      const result = await runAnalystWithAllowedScan({
         writtenPath: rcaPath,
         systemPromptPath,
         config: {},
@@ -94,7 +98,7 @@ describe('runAnalyst', () => {
     try {
       const rcaPath = makeFakeRcaFile(dir);
       const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
-      const result = await runAnalyst({
+      const result = await runAnalystWithAllowedScan({
         writtenPath: rcaPath,
         systemPromptPath,
         config: {},
@@ -110,31 +114,31 @@ describe('runAnalyst', () => {
     }
   });
 
-  it('asserts --allowedTools Read is in the spawn argv (§2.8 hard rule)', async () => {
+  it('disables tools and uses the isolated workspace for provider execution', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-argv-'));
     try {
       const rcaPath = makeFakeRcaFile(dir);
       const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
       let capturedArgv;
-      await runAnalyst({
+      let capturedOptions;
+      await runAnalystWithAllowedScan({
         writtenPath: rcaPath,
         systemPromptPath,
         config: {},
-        _spawnFn: async (_cmd, argv) => {
+        _spawnFn: async (_cmd, argv, options) => {
           capturedArgv = argv;
+          capturedOptions = options;
+          assert.ok(existsSync(options.cwd));
           return {
             stdout: JSON.stringify({ structured_output: { verdict: 'PUBLISH', findings: 'ok' } }),
           };
         },
       });
       assert.ok(capturedArgv, 'spawn must have been called');
-      const toolsIdx = capturedArgv.indexOf('--allowedTools');
-      assert.ok(toolsIdx !== -1, '--allowedTools must be present in argv');
-      assert.strictEqual(
-        capturedArgv[toolsIdx + 1],
-        'Read',
-        '--allowedTools value must be Read only',
-      );
+      const toolsIdx = capturedArgv.indexOf('--tools');
+      assert.ok(toolsIdx !== -1, '--tools must be present in argv');
+      assert.strictEqual(capturedArgv[toolsIdx + 1], '', 'provider tools must be empty');
+      assert.strictEqual(existsSync(capturedOptions.cwd), false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -148,7 +152,7 @@ describe('runAnalyst', () => {
       const { RcaError } = await import('../../src/errors.mjs');
       await assert.rejects(
         () =>
-          runAnalyst({
+          runAnalystWithAllowedScan({
             writtenPath: rcaPath,
             systemPromptPath,
             config: {},
@@ -173,7 +177,7 @@ describe('runAnalyst', () => {
       const { RcaError } = await import('../../src/errors.mjs');
       await assert.rejects(
         () =>
-          runAnalyst({
+          runAnalystWithAllowedScan({
             writtenPath: rcaPath,
             systemPromptPath,
             config: {},
@@ -183,6 +187,98 @@ describe('runAnalyst', () => {
           }),
         (err) => err instanceof RcaError,
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects scanner failure before spawning and preserves the scanner error', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-scan-'));
+    try {
+      const rcaPath = makeFakeRcaFile(dir);
+      const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
+      const scanError = new (await import('../../src/errors.mjs')).RcaError('SECRET_SCAN_FAILED');
+      let spawnCount = 0;
+
+      await assert.rejects(
+        () =>
+          runAnalyst({
+            writtenPath: rcaPath,
+            systemPromptPath,
+            config: {},
+            _scanFn: async () => {
+              throw scanError;
+            },
+            _spawnFn: async () => {
+              spawnCount += 1;
+              return { stdout: '{}' };
+            },
+          }),
+        (error) => error === scanError,
+      );
+      assert.strictEqual(spawnCount, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('scans and inlines document content without exposing its original path', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-inline-'));
+    try {
+      const rcaPath = makeFakeRcaFile(dir);
+      const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
+      let scannedPayload;
+      let providerInput;
+
+      await runAnalyst({
+        writtenPath: rcaPath,
+        systemPromptPath,
+        config: {},
+        _scanFn: async ({ payload }) => {
+          scannedPayload = payload;
+        },
+        _spawnFn: async (_cmd, argv) => {
+          providerInput = argv[argv.indexOf('-p') + 1];
+          return {
+            stdout: JSON.stringify({
+              structured_output: { verdict: 'PUBLISH', findings: 'Content is complete.' },
+            }),
+          };
+        },
+      });
+
+      assert.ok(scannedPayload.includes('Null pointer in middleware/auth.js:47.'));
+      assert.ok(providerInput.includes('Null pointer in middleware/auth.js:47.'));
+      assert.ok(!scannedPayload.includes(rcaPath));
+      assert.ok(!providerInput.includes(rcaPath));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed without spawning when the RCA document cannot be read', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-read-'));
+    try {
+      let spawnCount = 0;
+      await assert.rejects(
+        () =>
+          runAnalyst({
+            writtenPath: join(dir, 'missing.md'),
+            systemPromptPath: join(ROOT, '.claude', 'agents', 'rca-analyst.md'),
+            config: {},
+            _scanFn: async () => assert.fail('scanner must not run without complete input'),
+            _spawnFn: async () => {
+              spawnCount += 1;
+              return { stdout: '{}' };
+            },
+          }),
+        (error) => {
+          assert.strictEqual(error.code, 'DISK_ERROR');
+          assert.ok(!error.message.includes('missing.md'));
+          return true;
+        },
+      );
+      assert.strictEqual(spawnCount, 0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

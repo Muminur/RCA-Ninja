@@ -4,6 +4,51 @@
 // about a specific LLM CLI's flags and output shape. Everything outside this
 // directory must stay provider-agnostic.
 
+const PROVIDER_ENV_KEYS = [
+  'PATH',
+  'SystemRoot',
+  'WINDIR',
+  'ComSpec',
+  'PATHEXT',
+  'TEMP',
+  'TMP',
+  'TMPDIR',
+  'HOME',
+  'USERPROFILE',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_CACHE_HOME',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TERM',
+];
+
+const PROVIDER_AUTH_ENV_KEYS = {
+  // Claude Code supports direct API-key and OAuth-token authentication. These
+  // are the only secret-bearing variables retained for the Claude process.
+  claude: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
+  // Codex uses OPENAI_API_KEY. CODEX_API_KEY is intentionally not accepted.
+  codex: ['OPENAI_API_KEY'],
+};
+
+export function buildProviderEnv(providerName, sourceEnv = process.env) {
+  const safeEnv = {};
+  const sourceKeys = Object.keys(sourceEnv ?? {});
+  const allowedKeys = [...PROVIDER_ENV_KEYS, ...(PROVIDER_AUTH_ENV_KEYS[providerName] || [])];
+
+  for (const allowedKey of allowedKeys) {
+    const sourceKey = sourceKeys.find((key) => key.toLowerCase() === allowedKey.toLowerCase());
+    if (sourceKey !== undefined && sourceEnv[sourceKey] !== undefined) {
+      safeEnv[allowedKey] = sourceEnv[sourceKey];
+    }
+  }
+
+  return safeEnv;
+}
+
 /**
  * Split a configured binary string into a command + fixed prefix args.
  *

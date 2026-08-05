@@ -1,11 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { getProvider, SUPPORTED_PROVIDERS } from '../../src/providers/index.mjs';
-import { resolveBinary, toStrictSchema } from '../../src/providers/shared.mjs';
+import * as shared from '../../src/providers/shared.mjs';
 import * as claude from '../../src/providers/claude.mjs';
 import * as codex from '../../src/providers/codex.mjs';
 import { RcaError } from '../../src/errors.mjs';
@@ -25,18 +26,24 @@ const FAKE_CONTEXT = {
 
 describe('resolveBinary', () => {
   it('splits a plain binary name', () => {
-    assert.deepStrictEqual(resolveBinary('claude', 'claude'), { cmd: 'claude', cmdPrefix: [] });
+    assert.deepStrictEqual(shared.resolveBinary('claude', 'claude'), {
+      cmd: 'claude',
+      cmdPrefix: [],
+    });
   });
 
   it('splits "node /path/to/stub.mjs" into cmd + prefix args', () => {
-    assert.deepStrictEqual(resolveBinary('node /tmp/stub.mjs', 'claude'), {
+    assert.deepStrictEqual(shared.resolveBinary('node /tmp/stub.mjs', 'claude'), {
       cmd: 'node',
       cmdPrefix: ['/tmp/stub.mjs'],
     });
   });
 
   it('uses the fallback when binary is undefined', () => {
-    assert.deepStrictEqual(resolveBinary(undefined, 'codex'), { cmd: 'codex', cmdPrefix: [] });
+    assert.deepStrictEqual(shared.resolveBinary(undefined, 'codex'), {
+      cmd: 'codex',
+      cmdPrefix: [],
+    });
   });
 });
 
@@ -64,7 +71,7 @@ describe('getProvider', () => {
 });
 
 describe('toStrictSchema', () => {
-  const strict = toStrictSchema(JSON.parse(RCA_SCHEMA_STR));
+  const strict = shared.toStrictSchema(JSON.parse(RCA_SCHEMA_STR));
 
   it('marks every top-level property as required', () => {
     assert.deepStrictEqual(
@@ -97,38 +104,53 @@ describe('toStrictSchema', () => {
 });
 
 describe('claude adapter — buildGenerateInvocation', () => {
-  it('produces the canonical claude argv and no stdin input', () => {
-    const inv = claude.buildGenerateInvocation({
-      config: { claude: { binary: 'claude' } },
-      contextFile: '/tmp/ctx.json',
-      diffFile: '/tmp/diff.txt',
-      systemPrompt: 'SYS',
-      schemaStr: RCA_SCHEMA_STR,
-    });
-    assert.strictEqual(inv.cmd, 'claude');
-    assert.strictEqual(inv.input, undefined, 'claude passes the prompt via -p, not stdin');
-    for (const flag of [
-      '-p',
-      '--append-system-prompt',
-      '--output-format',
-      '--json-schema',
-      '--allowedTools',
-      '--permission-mode',
-    ]) {
-      assert.ok(inv.argv.includes(flag), `argv must include ${flag}`);
+  it('uses a fixed binary, inline payload, isolated cwd, and non-overridable safety flags', () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'provider-test-'));
+    try {
+      const payload = JSON.stringify({ marker: 'complete-provider-payload' });
+      const inv = claude.buildGenerateInvocation({
+        config: {
+          claude: {
+            binary: 'attacker-controlled',
+            allowed_tools: 'Read,Write,Bash',
+            permission_mode: 'bypassPermissions',
+            use_bare: false,
+          },
+        },
+        payload,
+        schemaStr: RCA_SCHEMA_STR,
+        workspaceDir,
+      });
+      assert.strictEqual(inv.cmd, 'claude');
+      assert.strictEqual(inv.cwd, workspaceDir);
+      assert.ok(
+        inv.argv.some((arg) => arg.includes(payload)),
+        'the complete payload must be inline',
+      );
+      for (const flag of [
+        '--bare',
+        '--safe-mode',
+        '--tools',
+        '--no-session-persistence',
+        '--output-format',
+        '--json-schema',
+      ]) {
+        assert.ok(inv.argv.includes(flag), `argv must include ${flag}`);
+      }
+      assert.strictEqual(inv.argv[inv.argv.indexOf('--tools') + 1], '');
+      assert.ok(!inv.argv.includes('Read,Write,Bash'));
+      assert.ok(!inv.argv.includes('bypassPermissions'));
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
     }
-    const pmIdx = inv.argv.indexOf('--permission-mode');
-    assert.strictEqual(inv.argv[pmIdx + 1], 'plan');
-    assert.ok(!inv.argv.includes('--bare'), 'argv must never contain --bare');
   });
 
   it('extractRca reads structured_output', () => {
     const inv = claude.buildGenerateInvocation({
       config: {},
-      contextFile: '/tmp/c',
-      diffFile: '/tmp/d',
-      systemPrompt: 'S',
+      payload: '{}',
       schemaStr: RCA_SCHEMA_STR,
+      workspaceDir: tmpdir(),
     });
     const out = inv.extractRca(
       JSON.stringify({ structured_output: { title: 'x' }, total_cost_usd: 0.5, session_id: 's1' }),
@@ -140,52 +162,96 @@ describe('claude adapter — buildGenerateInvocation', () => {
 });
 
 describe('codex adapter — buildGenerateInvocation', () => {
-  it('produces a `codex exec` invocation with schema/output flags and stdin input', () => {
+  it('uses fixed hardening flags, isolated cwd, workspace temp files, and stdin only', () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'provider-test-'));
     const inv = codex.buildGenerateInvocation({
-      config: { codex: { binary: 'codex' } },
-      systemPrompt: 'SYS-PROMPT',
+      config: {
+        codex: {
+          binary: 'attacker-controlled',
+          sandbox: 'danger-full-access',
+          model: 'gpt-x',
+        },
+      },
+      payload: JSON.stringify({ marker: 'complete-provider-payload', context: FAKE_CONTEXT }),
       schemaStr: RCA_SCHEMA_STR,
-      context: FAKE_CONTEXT,
-      priorRcas: [],
+      workspaceDir,
     });
     try {
       assert.strictEqual(inv.cmd, 'codex');
+      assert.strictEqual(inv.cwd, workspaceDir);
       assert.strictEqual(inv.argv[0], 'exec');
-      for (const flag of ['--sandbox', '--skip-git-repo-check', '--output-schema', '-o']) {
+      for (const flag of [
+        '--sandbox',
+        '--ignore-user-config',
+        '--ignore-rules',
+        '--ephemeral',
+        '--skip-git-repo-check',
+        '--cd',
+        '--output-schema',
+        '-o',
+      ]) {
         assert.ok(inv.argv.includes(flag), `argv must include ${flag}`);
       }
       const sIdx = inv.argv.indexOf('--sandbox');
       assert.strictEqual(inv.argv[sIdx + 1], 'read-only');
-      // The prompt (with the diff) goes via stdin, NOT argv — avoids arg-length limits.
-      assert.ok(typeof inv.input === 'string' && inv.input.includes('SYS-PROMPT'));
-      assert.ok(
-        inv.input.includes(FAKE_CONTEXT.diff),
-        'diff must be inlined into the stdin prompt',
-      );
-      assert.ok(
-        !inv.argv.some((a) => a.includes(FAKE_CONTEXT.diff)),
-        'diff must not appear in argv',
-      );
+      assert.strictEqual(inv.argv[inv.argv.indexOf('--cd') + 1], workspaceDir);
+      assert.ok(typeof inv.input === 'string' && inv.input.includes('complete-provider-payload'));
+      assert.ok(!inv.argv.some((arg) => arg.includes(FAKE_CONTEXT.diff)));
+      assert.ok(inv.argv[inv.argv.indexOf('--output-schema') + 1].startsWith(workspaceDir));
+      assert.ok(inv.argv[inv.argv.indexOf('-o') + 1].startsWith(workspaceDir));
+      assert.ok(!inv.argv.includes('danger-full-access'));
+      assert.ok(inv.argv.includes('gpt-x'));
     } finally {
       inv.cleanup();
+      rmSync(workspaceDir, { recursive: true, force: true });
     }
   });
 
-  it('honors sandbox and model overrides', () => {
-    const inv = codex.buildGenerateInvocation({
-      config: { codex: { binary: 'codex', sandbox: 'workspace-write', model: 'gpt-x' } },
-      systemPrompt: 'S',
-      schemaStr: RCA_SCHEMA_STR,
-      context: FAKE_CONTEXT,
+  it('does not expose source RCA paths in analyst input', () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'provider-test-'));
+    const sourcePath = join(ROOT, 'private', 'RCA-secret.md');
+    const documentContent = '## Root Cause\nThe validated document body.';
+    const inv = codex.buildAnalystInvocation({
+      config: {},
+      payload: JSON.stringify({ systemPrompt: 'Analyze carefully.', documentContent }),
+      workspaceDir,
     });
     try {
-      const sIdx = inv.argv.indexOf('--sandbox');
-      assert.strictEqual(inv.argv[sIdx + 1], 'workspace-write');
-      const mIdx = inv.argv.indexOf('--model');
-      assert.strictEqual(inv.argv[mIdx + 1], 'gpt-x');
+      assert.ok(inv.input.includes('The validated document body.'));
+      assert.ok(!inv.input.includes(sourcePath));
     } finally {
       inv.cleanup();
+      rmSync(workspaceDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('provider environment allowlist', () => {
+  it('preserves required Claude authentication but strips unrelated secrets', () => {
+    const env = shared.buildProviderEnv('claude', {
+      PATH: '/bin',
+      ANTHROPIC_API_KEY: 'test-anthropic-auth',
+      CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth-auth',
+      DATABASE_URL: 'must-not-leak',
+    });
+    assert.deepStrictEqual(env, {
+      PATH: '/bin',
+      ANTHROPIC_API_KEY: 'test-anthropic-auth',
+      CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth-auth',
+    });
+  });
+
+  it('never passes CODEX_API_KEY or unrelated secrets to Codex', () => {
+    const env = shared.buildProviderEnv('codex', {
+      PATH: '/bin',
+      OPENAI_API_KEY: 'test-openai-auth',
+      CODEX_API_KEY: 'must-not-leak',
+      DATABASE_URL: 'must-not-leak',
+    });
+    assert.deepStrictEqual(env, {
+      PATH: '/bin',
+      OPENAI_API_KEY: 'test-openai-auth',
+    });
   });
 });
 
