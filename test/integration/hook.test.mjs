@@ -324,4 +324,48 @@ describe('hooks', () => {
       for (const [key, value] of originalEntries) process.env[key] = value;
     }
   });
+
+  it('isolates installer execution from ambient mixed-case legacy GIT_CONFIG', () => {
+    const sharedRoot = mkdtempSync(join(tmpdir(), 'claude-rca-hook-legacy-config-'));
+    const sharedHooks = join(sharedRoot, 'hooks');
+    const legacyConfig = join(sharedRoot, 'legacy.gitconfig');
+    mkdirSync(sharedHooks, { recursive: true });
+    writeFileSync(
+      legacyConfig,
+      `[core]\n\thooksPath = ${sharedHooks.replaceAll('\\', '/')}\n`,
+      'utf8',
+    );
+    const legacyKey = 'GIT_CONFIG';
+    const originalEntries = Object.entries(process.env).filter(
+      ([key]) => key.toUpperCase() === legacyKey,
+    );
+    git(['config', '--local', '--unset', 'core.hooksPath'], tmp, testGitEnv);
+
+    try {
+      process.env.Git_Config = legacyConfig;
+      const { env } = makeIsolatedGitEnv('claude-rca-hook-legacy-', {
+        globalHooksPath: sharedHooks,
+      });
+
+      const result = spawnSync(BASH, [INSTALL_HOOK, tmp], {
+        cwd: tmp,
+        encoding: 'utf8',
+        env,
+      });
+
+      assert.notStrictEqual(result.status, 0);
+      assert.strictEqual(existsSync(join(sharedHooks, 'post-commit')), false);
+      assert.strictEqual(existsSync(join(sharedHooks, 'commit-msg')), false);
+      assert.deepStrictEqual(
+        Object.keys(env).filter((key) => key.toUpperCase() === legacyKey),
+        [],
+        'installer test environment must scrub legacy GIT_CONFIG regardless of casing',
+      );
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (key.toUpperCase() === legacyKey) delete process.env[key];
+      }
+      for (const [key, value] of originalEntries) process.env[key] = value;
+    }
+  });
 });

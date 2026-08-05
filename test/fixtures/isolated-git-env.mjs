@@ -6,6 +6,7 @@ const BLOCKED_GIT_ENV_KEYS = new Set([
   'HOME',
   'USERPROFILE',
   'XDG_CONFIG_HOME',
+  'GIT_CONFIG',
   'GIT_DIR',
   'GIT_WORK_TREE',
   'GIT_COMMON_DIR',

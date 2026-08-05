@@ -226,4 +226,49 @@ describe('doctor checks the RCA pipeline itself', () => {
     assert.doesNotMatch(stdout, /^hook\s+ok/m);
     assert.match(stdout, /^auto-gen\s+FAIL\s+.*local hook/im);
   });
+
+  it('isolates doctor from an ambient mixed-case legacy GIT_CONFIG', () => {
+    const sharedRoot = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-legacy-config-'));
+    const sharedHooks = join(sharedRoot, 'hooks');
+    const legacyConfig = join(sharedRoot, 'legacy.gitconfig');
+    mkdirSync(sharedHooks, { recursive: true });
+    copyFileSync(POST_COMMIT, join(sharedHooks, 'post-commit'));
+    writeFileSync(
+      legacyConfig,
+      `[core]\n\thooksPath = ${sharedHooks.replaceAll('\\', '/')}\n`,
+      'utf8',
+    );
+    const legacyKey = 'GIT_CONFIG';
+    const originalEntries = Object.entries(process.env).filter(
+      ([key]) => key.toUpperCase() === legacyKey,
+    );
+
+    try {
+      process.env.Git_Config = legacyConfig;
+      const { repo, env } = makeRepo('claude-rca-doc-legacy-config-', {
+        globalHooksPath: sharedHooks,
+        setLocalHooksPath: false,
+      });
+      writeFileSync(
+        join(repo, '.claude-rca.json'),
+        JSON.stringify({ version: 1, auto_generate: true }),
+      );
+
+      const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
+
+      assert.doesNotMatch(stdout, /^hook\s+ok/m);
+      assert.match(stdout, /^hook\s+WARN\s+.*not repository-local/im);
+      assert.match(stdout, /^auto-gen\s+FAIL\s+.*local hook/im);
+      assert.deepStrictEqual(
+        Object.keys(env).filter((key) => key.toUpperCase() === legacyKey),
+        [],
+        'doctor test environment must scrub legacy GIT_CONFIG regardless of casing',
+      );
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (key.toUpperCase() === legacyKey) delete process.env[key];
+      }
+      for (const [key, value] of originalEntries) process.env[key] = value;
+    }
+  });
 });
