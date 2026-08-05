@@ -38,6 +38,11 @@ const ERROR_TABLE = {
     exit: 32,
     template: 'The secret scanner blocked provider execution.',
   },
+  PROVIDER_ISOLATION_UNAVAILABLE: {
+    category: 'env',
+    exit: 33,
+    template: 'No approved isolated provider broker is available; provider execution was refused.',
+  },
   NOT_FOUND: { category: 'input', exit: 40, template: 'RCA not found: {id}.' },
   INVALID_CONFIG_KEY: { category: 'input', exit: 50, template: 'Unknown config key: {key}.' },
   INVALID_CONFIG_VALUE: {

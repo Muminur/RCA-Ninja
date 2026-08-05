@@ -175,6 +175,7 @@ describe('runAnalyst', () => {
       const rcaPath = makeFakeRcaFile(dir);
       const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
       const { RcaError } = await import('../../src/errors.mjs');
+      const sensitiveProviderText = 'provider stderr included private material';
       await assert.rejects(
         () =>
           runAnalystWithAllowedScan({
@@ -182,11 +183,51 @@ describe('runAnalyst', () => {
             systemPromptPath,
             config: {},
             _spawnFn: async () => {
-              throw new Error('claude exited with 1');
+              throw Object.assign(new Error(sensitiveProviderText), {
+                stderr: sensitiveProviderText,
+              });
             },
           }),
-        (err) => err instanceof RcaError,
+        (err) => {
+          assert.ok(err instanceof RcaError);
+          assert.strictEqual(err.code, 'CLAUDE_FAILURE');
+          assert.ok(!err.message.includes(sensitiveProviderText));
+          assert.ok(!JSON.stringify(err.context).includes(sensitiveProviderText));
+          return true;
+        },
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves SECRET_SCANNER_UNAVAILABLE before spawning', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-unavailable-'));
+    try {
+      const rcaPath = makeFakeRcaFile(dir);
+      const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
+      const scanError = new (await import('../../src/errors.mjs')).RcaError(
+        'SECRET_SCANNER_UNAVAILABLE',
+      );
+      let spawnCount = 0;
+
+      await assert.rejects(
+        () =>
+          runAnalyst({
+            writtenPath: rcaPath,
+            systemPromptPath,
+            config: {},
+            _scanFn: async () => {
+              throw scanError;
+            },
+            _spawnFn: async () => {
+              spawnCount += 1;
+              return { stdout: '{}' };
+            },
+          }),
+        (error) => error === scanError,
+      );
+      assert.strictEqual(spawnCount, 0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -237,8 +278,8 @@ describe('runAnalyst', () => {
         _scanFn: async ({ payload }) => {
           scannedPayload = payload;
         },
-        _spawnFn: async (_cmd, argv) => {
-          providerInput = argv[argv.indexOf('-p') + 1];
+        _spawnFn: async (_cmd, _argv, options) => {
+          providerInput = options.input;
           return {
             stdout: JSON.stringify({
               structured_output: { verdict: 'PUBLISH', findings: 'Content is complete.' },
@@ -251,6 +292,32 @@ describe('runAnalyst', () => {
       assert.ok(providerInput.includes('Null pointer in middleware/auth.js:47.'));
       assert.ok(!scannedPayload.includes(rcaPath));
       assert.ok(!providerInput.includes(rcaPath));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when no isolated analyst broker is injected', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-isolation-'));
+    try {
+      const rcaPath = makeFakeRcaFile(dir);
+      let scans = 0;
+      await assert.rejects(
+        () =>
+          runAnalyst({
+            writtenPath: rcaPath,
+            systemPromptPath: join(ROOT, '.claude', 'agents', 'rca-analyst.md'),
+            config: { claude: { timeout_ms: 1 } },
+            _scanFn: async () => {
+              scans += 1;
+            },
+          }),
+        (error) => {
+          assert.strictEqual(error.code, 'PROVIDER_ISOLATION_UNAVAILABLE');
+          return true;
+        },
+      );
+      assert.strictEqual(scans, 0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

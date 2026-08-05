@@ -43,6 +43,9 @@ function codexBaseArgs(config, workspaceDir) {
     '--ignore-user-config',
     '--ignore-rules',
     '--ephemeral',
+    '--strict-config',
+    '--config',
+    'agents.enabled=false',
     '--skip-git-repo-check',
     '--cd',
     workspaceDir,
@@ -63,6 +66,7 @@ function cleanupFiles(paths) {
 
 export function buildGenerateInvocation({ config, payload, schemaStr, workspaceDir }) {
   const c = config?.codex || {};
+  const env = buildProviderEnv(name, process.env, workspaceDir);
   const outFile = join(workspaceDir, `codex-rca-output-${randomUUID()}.json`);
   const schemaFile = writeSchema(
     workspaceDir,
@@ -76,7 +80,7 @@ export function buildGenerateInvocation({ config, payload, schemaStr, workspaceD
     cmd: defaultBinary,
     argv,
     cwd: workspaceDir,
-    env: buildProviderEnv(name),
+    env,
     input:
       'Produce a Root Cause Analysis as one JSON object conforming to the output schema. ' +
       `Use only this inline input:\n${payload}`,
@@ -106,6 +110,7 @@ const VERDICT_SCHEMA = {
 
 export function buildAnalystInvocation({ config, payload, workspaceDir }) {
   const c = config?.codex || {};
+  const env = buildProviderEnv(name, process.env, workspaceDir);
   const outFile = join(workspaceDir, `codex-analyst-output-${randomUUID()}.json`);
   const schemaFile = writeSchema(workspaceDir, 'codex-analyst-schema', VERDICT_SCHEMA);
   const argv = codexBaseArgs(c, workspaceDir);
@@ -115,7 +120,7 @@ export function buildAnalystInvocation({ config, payload, workspaceDir }) {
     cmd: defaultBinary,
     argv,
     cwd: workspaceDir,
-    env: buildProviderEnv(name),
+    env,
     input:
       'Analyze the RCA and return one JSON object with verdict and findings. ' +
       `Use only this inline input:\n${payload}`,

@@ -23,7 +23,7 @@ function extractRca(stdout) {
   return { rcaData, cost: parsed.total_cost_usd, sessionId: parsed.session_id };
 }
 
-function claudeBaseArgs(prompt) {
+function claudeBaseArgs() {
   return [
     '--bare',
     '--safe-mode',
@@ -31,7 +31,6 @@ function claudeBaseArgs(prompt) {
     '',
     '--no-session-persistence',
     '-p',
-    prompt,
     '--output-format',
     'json',
   ];
@@ -39,17 +38,19 @@ function claudeBaseArgs(prompt) {
 
 export function buildGenerateInvocation({ config, payload, schemaStr, workspaceDir }) {
   const c = config?.claude || {};
+  const env = buildProviderEnv(name, process.env, workspaceDir);
   const prompt =
     'Produce a Root Cause Analysis as one JSON object conforming to the supplied schema. ' +
     `Use only this inline input:\n${payload}`;
-  const argv = claudeBaseArgs(prompt);
+  const argv = claudeBaseArgs();
   argv.push('--json-schema', schemaStr);
 
   return {
     cmd: defaultBinary,
     argv,
     cwd: workspaceDir,
-    env: buildProviderEnv(name),
+    env,
+    input: prompt,
     timeoutMs: c.timeout_ms || 60000,
     maxRetries: c.max_retries ?? 1,
     extractRca,
@@ -69,17 +70,19 @@ const VERDICT_SCHEMA = {
 
 export function buildAnalystInvocation({ config, payload, workspaceDir }) {
   const c = config?.claude || {};
+  const env = buildProviderEnv(name, process.env, workspaceDir);
   const prompt =
     'Analyze the RCA and return one JSON object with verdict and findings. ' +
     `Use only this inline input:\n${payload}`;
-  const argv = claudeBaseArgs(prompt);
+  const argv = claudeBaseArgs();
   argv.push('--json-schema', JSON.stringify(VERDICT_SCHEMA));
 
   return {
     cmd: defaultBinary,
     argv,
     cwd: workspaceDir,
-    env: buildProviderEnv(name),
+    env,
+    input: prompt,
     timeoutMs: c.timeout_ms || 60000,
     extractVerdict: (stdout) => {
       const parsed = JSON.parse(stdout);

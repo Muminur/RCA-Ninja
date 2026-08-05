@@ -104,10 +104,10 @@ describe('toStrictSchema', () => {
 });
 
 describe('claude adapter — buildGenerateInvocation', () => {
-  it('uses a fixed binary, inline payload, isolated cwd, and non-overridable safety flags', () => {
+  it('uses a fixed binary, stdin payload, isolated cwd, and non-overridable safety flags', () => {
     const workspaceDir = mkdtempSync(join(tmpdir(), 'provider-test-'));
     try {
-      const payload = JSON.stringify({ marker: 'complete-provider-payload' });
+      const payload = JSON.stringify({ marker: 'x'.repeat(50_000) });
       const inv = claude.buildGenerateInvocation({
         config: {
           claude: {
@@ -123,10 +123,8 @@ describe('claude adapter — buildGenerateInvocation', () => {
       });
       assert.strictEqual(inv.cmd, 'claude');
       assert.strictEqual(inv.cwd, workspaceDir);
-      assert.ok(
-        inv.argv.some((arg) => arg.includes(payload)),
-        'the complete payload must be inline',
-      );
+      assert.ok(inv.input.includes(payload), 'the complete payload must use stdin');
+      assert.ok(!inv.argv.some((arg) => arg.length > 10_000), 'large input must not enter argv');
       for (const flag of [
         '--bare',
         '--safe-mode',
@@ -140,6 +138,7 @@ describe('claude adapter — buildGenerateInvocation', () => {
       assert.strictEqual(inv.argv[inv.argv.indexOf('--tools') + 1], '');
       assert.ok(!inv.argv.includes('Read,Write,Bash'));
       assert.ok(!inv.argv.includes('bypassPermissions'));
+      assert.ok(!inv.argv.some((arg) => arg.includes(payload)));
     } finally {
       rmSync(workspaceDir, { recursive: true, force: true });
     }
@@ -162,7 +161,7 @@ describe('claude adapter — buildGenerateInvocation', () => {
 });
 
 describe('codex adapter — buildGenerateInvocation', () => {
-  it('uses fixed hardening flags, isolated cwd, workspace temp files, and stdin only', () => {
+  it('uses documented fixed flags, isolated cwd, workspace temp files, and stdin only', () => {
     const workspaceDir = mkdtempSync(join(tmpdir(), 'provider-test-'));
     const inv = codex.buildGenerateInvocation({
       config: {
@@ -185,6 +184,7 @@ describe('codex adapter — buildGenerateInvocation', () => {
         '--ignore-user-config',
         '--ignore-rules',
         '--ephemeral',
+        '--strict-config',
         '--skip-git-repo-check',
         '--cd',
         '--output-schema',
@@ -201,6 +201,8 @@ describe('codex adapter — buildGenerateInvocation', () => {
       assert.ok(inv.argv[inv.argv.indexOf('-o') + 1].startsWith(workspaceDir));
       assert.ok(!inv.argv.includes('danger-full-access'));
       assert.ok(inv.argv.includes('gpt-x'));
+      assert.ok(!inv.argv.includes('shell_tool'));
+      assert.ok(!inv.argv.includes('shell_snapshot'));
     } finally {
       inv.cleanup();
       rmSync(workspaceDir, { recursive: true, force: true });
@@ -227,30 +229,70 @@ describe('codex adapter — buildGenerateInvocation', () => {
 });
 
 describe('provider environment allowlist', () => {
-  it('preserves required Claude authentication but strips unrelated secrets', () => {
-    const env = shared.buildProviderEnv('claude', {
-      PATH: '/bin',
-      ANTHROPIC_API_KEY: 'test-anthropic-auth',
-      CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth-auth',
-      DATABASE_URL: 'must-not-leak',
-    });
+  it('fails closed when a sterile absolute provider root cannot be formed', () => {
+    for (const workspaceDir of [undefined, '', 'relative-provider-root']) {
+      assert.throws(
+        () => shared.buildProviderEnv('codex', { PATH: '/bin' }, workspaceDir),
+        (error) => error instanceof RcaError && error.code === 'PROVIDER_ISOLATION_UNAVAILABLE',
+      );
+    }
+  });
+
+  it('gives Claude sterile roots and no inherited auth, profile, or unrelated secrets', () => {
+    const workspaceDir = join(tmpdir(), 'sterile-claude-workspace');
+    const env = shared.buildProviderEnv(
+      'claude',
+      {
+        PATH: '/bin',
+        ANTHROPIC_API_KEY: 'test-anthropic-auth',
+        CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth-auth',
+        HOME: '/real/profile',
+        USERPROFILE: 'C:\\real\\profile',
+        APPDATA: 'C:\\real\\profile\\appdata',
+        TEMP: 'C:\\real\\temp',
+        DATABASE_URL: 'must-not-leak',
+      },
+      workspaceDir,
+    );
     assert.deepStrictEqual(env, {
       PATH: '/bin',
-      ANTHROPIC_API_KEY: 'test-anthropic-auth',
-      CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth-auth',
+      HOME: workspaceDir,
+      USERPROFILE: workspaceDir,
+      APPDATA: workspaceDir,
+      LOCALAPPDATA: workspaceDir,
+      TEMP: workspaceDir,
+      TMP: workspaceDir,
+      TMPDIR: workspaceDir,
+      CLAUDE_CONFIG_DIR: workspaceDir,
     });
   });
 
-  it('never passes CODEX_API_KEY or unrelated secrets to Codex', () => {
-    const env = shared.buildProviderEnv('codex', {
-      PATH: '/bin',
-      OPENAI_API_KEY: 'test-openai-auth',
-      CODEX_API_KEY: 'must-not-leak',
-      DATABASE_URL: 'must-not-leak',
-    });
+  it('gives Codex sterile roots and no inherited auth, profile, or unrelated secrets', () => {
+    const workspaceDir = join(tmpdir(), 'sterile-codex-workspace');
+    const env = shared.buildProviderEnv(
+      'codex',
+      {
+        PATH: '/bin',
+        OPENAI_API_KEY: 'test-openai-auth',
+        CODEX_API_KEY: 'must-not-leak',
+        HOME: '/real/profile',
+        USERPROFILE: 'C:\\real\\profile',
+        APPDATA: 'C:\\real\\profile\\appdata',
+        TEMP: 'C:\\real\\temp',
+        DATABASE_URL: 'must-not-leak',
+      },
+      workspaceDir,
+    );
     assert.deepStrictEqual(env, {
       PATH: '/bin',
-      OPENAI_API_KEY: 'test-openai-auth',
+      HOME: workspaceDir,
+      USERPROFILE: workspaceDir,
+      APPDATA: workspaceDir,
+      LOCALAPPDATA: workspaceDir,
+      TEMP: workspaceDir,
+      TMP: workspaceDir,
+      TMPDIR: workspaceDir,
+      CODEX_HOME: workspaceDir,
     });
   });
 });

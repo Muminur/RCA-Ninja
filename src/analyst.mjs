@@ -2,7 +2,6 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import matter from 'gray-matter';
-import { run } from './util/exec.mjs';
 import { RcaError } from './errors.mjs';
 import { getProvider } from './providers/index.mjs';
 import { scanProviderPayload } from './secret-scan.mjs';
@@ -46,9 +45,14 @@ export async function runAnalyst({ writtenPath, systemPromptPath, config, _scanF
   }
   const systemPrompt = stripFrontmatter(systemPromptRaw);
   const payload = JSON.stringify({ systemPrompt, documentContent });
+
+  if (typeof _spawnFn !== 'function') {
+    throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+  }
+
   const workspaceDir = mkdtempSync(join(tmpdir(), 'codex-rca-provider-'));
 
-  const spawnFn = _spawnFn || ((c, a, o) => run(c, a, o));
+  const spawnFn = _spawnFn;
   const scanFn = _scanFn || scanProviderPayload;
   let inv;
 
@@ -65,8 +69,11 @@ export async function runAnalyst({ writtenPath, systemPromptPath, config, _scanF
         input: inv.input,
       });
       stdout = result.stdout;
-    } catch (err) {
-      throw new RcaError('CLAUDE_FAILURE', { detail: err.message });
+    } catch {
+      throw new RcaError('CLAUDE_FAILURE', {
+        exitCode: 'unavailable',
+        stderr_first_line: 'provider execution failed',
+      });
     }
 
     let verdict;

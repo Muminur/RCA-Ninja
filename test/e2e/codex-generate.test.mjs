@@ -55,6 +55,18 @@ describe('generate with Codex provider isolation', () => {
           providerInput = runOptions.input;
           assert.ok(existsSync(providerWorkspace));
           assert.strictEqual(argv[argv.indexOf('--cd') + 1], providerWorkspace);
+          assert.ok(!argv.includes('shell_tool'));
+          assert.ok(!argv.includes('shell_snapshot'));
+          for (const forbiddenKey of [
+            'OPENAI_API_KEY',
+            'CODEX_API_KEY',
+            'ANTHROPIC_API_KEY',
+            'CLAUDE_CODE_OAUTH_TOKEN',
+          ]) {
+            assert.ok(!(forbiddenKey in runOptions.env));
+          }
+          assert.strictEqual(runOptions.env.CODEX_HOME, providerWorkspace);
+          assert.strictEqual(runOptions.env.HOME, providerWorkspace);
           const outputPath = argv[argv.indexOf('-o') + 1];
           writeFileSync(outputPath, JSON.stringify(VALID_RCA));
           return { stdout: 'codex event stream', stderr: '' };
@@ -69,6 +81,7 @@ describe('generate with Codex provider isolation', () => {
 
   it('removes the isolated workspace after a failing provider run', async () => {
     let providerWorkspace;
+    const sensitiveProviderText = 'provider emitted private material';
 
     await assert.rejects(
       () =>
@@ -77,11 +90,19 @@ describe('generate with Codex provider isolation', () => {
             _runFn: async (_cmd, _argv, runOptions) => {
               providerWorkspace = runOptions.cwd;
               assert.ok(existsSync(providerWorkspace));
-              throw new Error('provider failed');
+              throw Object.assign(new Error(sensitiveProviderText), {
+                stdout: sensitiveProviderText,
+                stderr: sensitiveProviderText,
+              });
             },
           }),
         ),
-      (error) => error.code === 'CLAUDE_FAILURE',
+      (error) => {
+        assert.strictEqual(error.code, 'CLAUDE_FAILURE');
+        assert.ok(!error.message.includes(sensitiveProviderText));
+        assert.ok(!JSON.stringify(error.context).includes(sensitiveProviderText));
+        return true;
+      },
     );
 
     assert.strictEqual(existsSync(providerWorkspace), false);

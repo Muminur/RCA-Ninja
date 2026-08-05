@@ -1,7 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { run } from './util/exec.mjs';
 import { validateRca } from './schema.mjs';
 import { RcaError } from './errors.mjs';
 import { estimatePayload, TOKEN_WARN_THRESHOLD, TOKEN_HARD_LIMIT } from './token-estimate.mjs';
@@ -172,8 +171,8 @@ async function runProviderGenerate(
         }
         if (err.code === 'SCHEMA_VALIDATION') throw err;
         throw new RcaError('CLAUDE_FAILURE', {
-          exitCode: err.exitCode || err.code || 'unknown',
-          stderr_first_line: (err.stderr || err.message || '').split('\n')[0],
+          exitCode: 'unavailable',
+          stderr_first_line: 'provider execution failed',
         });
       }
     }
@@ -231,6 +230,10 @@ export async function generate({
     }
     process.stderr.write(`INFO: estimated_tokens=${estimate.total}\n`);
 
+    if (typeof _runFn !== 'function') {
+      throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+    }
+
     workspaceDir = mkdtempSync(join(tmpdir(), 'codex-rca-provider-'));
 
     const runOpts = {
@@ -240,32 +243,11 @@ export async function generate({
       payload,
       workspaceDir,
       scanFn: _scanFn || scanProviderPayload,
-      runFn: _runFn || run,
+      runFn: _runFn,
     };
 
-    // Run the configured provider. On a non-schema failure of the default
-    // (claude) provider, fall back to codex when it is explicitly configured —
-    // the "Claude unavailable → Codex" resilience feature. We gate on
-    // `config.codex` (which has no schema defaults, so it is only present when
-    // the user opts in); `config.claude` is always defaulted, so we never
-    // auto-fall-back the other direction onto the real claude binary.
     const primaryName = config.provider || 'claude';
-    try {
-      return await runProviderGenerate(primaryName, runOpts);
-    } catch (primaryErr) {
-      if (
-        primaryErr.code === 'SCHEMA_VALIDATION' ||
-        primaryErr.code === 'SECRET_SCANNER_UNAVAILABLE' ||
-        primaryErr.code === 'SECRET_SCAN_FAILED'
-      ) {
-        throw primaryErr;
-      }
-      if (primaryName === 'claude' && config.codex) {
-        process.stderr.write('WARN: claude generation failed; falling back to codex.\n');
-        return await runProviderGenerate('codex', runOpts);
-      }
-      throw primaryErr;
-    }
+    return await runProviderGenerate(primaryName, runOpts);
   } finally {
     if (workspaceDir !== undefined) {
       try {

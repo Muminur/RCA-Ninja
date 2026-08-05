@@ -84,6 +84,29 @@ describe('generate provider security gate', () => {
     assert.strictEqual(providerRuns, 0);
   });
 
+  it('preserves SECRET_SCANNER_UNAVAILABLE before the primary provider runs', async () => {
+    const scanError = new RcaError('SECRET_SCANNER_UNAVAILABLE');
+    let providerRuns = 0;
+
+    await assert.rejects(
+      () =>
+        generate(
+          generateOptions({
+            _scanFn: async () => {
+              throw scanError;
+            },
+            _runFn: async () => {
+              providerRuns += 1;
+              return claudeSuccess();
+            },
+          }),
+        ),
+      (error) => error === scanError,
+    );
+
+    assert.strictEqual(providerRuns, 0);
+  });
+
   it('rescans a schema retry and refuses the second provider run when that scan rejects', async () => {
     const events = [];
     const scanError = new RcaError('SECRET_SCAN_FAILED');
@@ -108,9 +131,33 @@ describe('generate provider security gate', () => {
     assert.deepStrictEqual(events, ['scan', 'run', 'scan']);
   });
 
-  it('scans the Codex fallback and never runs it when that scan rejects', async () => {
-    const scanError = new RcaError('SECRET_SCAN_FAILED');
-    const scans = [];
+  it('preserves SECRET_SCANNER_UNAVAILABLE on retry and skips the second provider run', async () => {
+    const events = [];
+    const scanError = new RcaError('SECRET_SCANNER_UNAVAILABLE');
+
+    await assert.rejects(
+      () =>
+        generate(
+          generateOptions({
+            _scanFn: async () => {
+              events.push('scan');
+              if (events.filter((event) => event === 'scan').length === 2) throw scanError;
+            },
+            _runFn: async () => {
+              events.push('run');
+              return { stdout: JSON.stringify({ structured_output: { bad: 'schema' } }) };
+            },
+          }),
+        ),
+      (error) => error === scanError,
+    );
+
+    assert.deepStrictEqual(events, ['scan', 'run', 'scan']);
+  });
+
+  it('does not enter a configured fallback when the primary scanner is unavailable', async () => {
+    const scanError = new RcaError('SECRET_SCANNER_UNAVAILABLE');
+    let scans = 0;
     let providerRuns = 0;
 
     await assert.rejects(
@@ -122,9 +169,9 @@ describe('generate provider security gate', () => {
               claude: { max_retries: 0 },
               codex: { max_retries: 0 },
             },
-            _scanFn: async ({ payload }) => {
-              scans.push(payload);
-              if (scans.length === 2) throw scanError;
+            _scanFn: async () => {
+              scans += 1;
+              throw scanError;
             },
             _runFn: async () => {
               providerRuns += 1;
@@ -135,9 +182,65 @@ describe('generate provider security gate', () => {
       (error) => error === scanError,
     );
 
+    assert.strictEqual(providerRuns, 0);
+    assert.strictEqual(scans, 1);
+  });
+
+  it('does not automatically fall back after a primary provider failure', async () => {
+    let scans = 0;
+    let providerRuns = 0;
+    const sensitiveProviderText = 'provider output contained private material';
+
+    await assert.rejects(
+      () =>
+        generate(
+          generateOptions({
+            config: {
+              provider: 'claude',
+              claude: { max_retries: 0 },
+              codex: { max_retries: 0 },
+            },
+            _scanFn: async () => {
+              scans += 1;
+            },
+            _runFn: async () => {
+              providerRuns += 1;
+              throw Object.assign(new Error(sensitiveProviderText), {
+                stderr: sensitiveProviderText,
+              });
+            },
+          }),
+        ),
+      (error) => {
+        assert.strictEqual(error.code, 'CLAUDE_FAILURE');
+        assert.ok(!error.message.includes(sensitiveProviderText));
+        assert.ok(!JSON.stringify(error.context).includes(sensitiveProviderText));
+        return true;
+      },
+    );
+
     assert.strictEqual(providerRuns, 1);
-    assert.strictEqual(scans.length, 2);
-    assert.strictEqual(scans[0], scans[1]);
+    assert.strictEqual(scans, 1);
+  });
+
+  it('fails closed before scanning when no isolated provider broker is injected', async () => {
+    let scans = 0;
+    await assert.rejects(
+      () =>
+        generate(
+          generateOptions({
+            config: { provider: 'claude', claude: { max_retries: 0, timeout_ms: 1 } },
+            _scanFn: async () => {
+              scans += 1;
+            },
+          }),
+        ),
+      (error) => {
+        assert.strictEqual(error.code, 'PROVIDER_ISOLATION_UNAVAILABLE');
+        return true;
+      },
+    );
+    assert.strictEqual(scans, 0);
   });
 
   it('scans one complete serialized payload with explicit null optionals', async () => {
@@ -165,5 +268,26 @@ describe('generate provider security gate', () => {
     assert.deepStrictEqual(parsed.context, CONTEXT);
     assert.strictEqual(parsed.priorRcas, null);
     assert.strictEqual(parsed.correctionHint, null);
+  });
+
+  it('delivers a large Claude payload over stdin without an oversized argv entry', async () => {
+    let observedInput;
+    let observedArgv;
+    const largeContext = { ...CONTEXT, diff: `diff --git a/a b/a\n+${'z'.repeat(50_000)}` };
+
+    await generate(
+      generateOptions({
+        context: largeContext,
+        _scanFn: async () => {},
+        _runFn: async (_cmd, argv, options) => {
+          observedArgv = argv;
+          observedInput = options.input;
+          return claudeSuccess();
+        },
+      }),
+    );
+
+    assert.ok(observedInput.includes('z'.repeat(50_000)));
+    assert.ok(!observedArgv.some((arg) => arg.length > 10_000));
   });
 });

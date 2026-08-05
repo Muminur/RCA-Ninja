@@ -4,47 +4,38 @@
 // about a specific LLM CLI's flags and output shape. Everything outside this
 // directory must stay provider-agnostic.
 
-const PROVIDER_ENV_KEYS = [
-  'PATH',
-  'SystemRoot',
-  'WINDIR',
-  'ComSpec',
-  'PATHEXT',
-  'TEMP',
-  'TMP',
-  'TMPDIR',
-  'HOME',
-  'USERPROFILE',
-  'APPDATA',
-  'LOCALAPPDATA',
-  'XDG_CONFIG_HOME',
-  'XDG_DATA_HOME',
-  'XDG_CACHE_HOME',
-  'LANG',
-  'LC_ALL',
-  'LC_CTYPE',
-  'TERM',
-];
+import { isAbsolute } from 'node:path';
+import { RcaError } from '../errors.mjs';
 
-const PROVIDER_AUTH_ENV_KEYS = {
-  // Claude Code supports direct API-key and OAuth-token authentication. These
-  // are the only secret-bearing variables retained for the Claude process.
-  claude: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
-  // Codex uses OPENAI_API_KEY. CODEX_API_KEY is intentionally not accepted.
-  codex: ['OPENAI_API_KEY'],
-};
+const STARTUP_ENV_KEYS = ['PATH', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT'];
 
-export function buildProviderEnv(providerName, sourceEnv = process.env) {
+export function buildProviderEnv(providerName, sourceEnv = process.env, workspaceDir) {
+  if (typeof workspaceDir !== 'string' || !isAbsolute(workspaceDir)) {
+    throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+  }
+
   const safeEnv = {};
   const sourceKeys = Object.keys(sourceEnv ?? {});
-  const allowedKeys = [...PROVIDER_ENV_KEYS, ...(PROVIDER_AUTH_ENV_KEYS[providerName] || [])];
 
-  for (const allowedKey of allowedKeys) {
+  for (const allowedKey of STARTUP_ENV_KEYS) {
     const sourceKey = sourceKeys.find((key) => key.toLowerCase() === allowedKey.toLowerCase());
     if (sourceKey !== undefined && sourceEnv[sourceKey] !== undefined) {
       safeEnv[allowedKey] = sourceEnv[sourceKey];
     }
   }
+
+  Object.assign(safeEnv, {
+    HOME: workspaceDir,
+    USERPROFILE: workspaceDir,
+    APPDATA: workspaceDir,
+    LOCALAPPDATA: workspaceDir,
+    TEMP: workspaceDir,
+    TMP: workspaceDir,
+    TMPDIR: workspaceDir,
+  });
+
+  if (providerName === 'codex') safeEnv.CODEX_HOME = workspaceDir;
+  if (providerName === 'claude') safeEnv.CLAUDE_CONFIG_DIR = workspaceDir;
 
   return safeEnv;
 }
