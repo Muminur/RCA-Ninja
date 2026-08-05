@@ -15,7 +15,7 @@ import {
 } from './config.mjs';
 import { RcaError } from './errors.mjs';
 import { buildContext } from './context.mjs';
-import { generate, scanForSecrets } from './generator.mjs';
+import { generate } from './generator.mjs';
 import { renderRca } from './renderer.mjs';
 import { writeRca, computeRcaPath } from './writer.mjs';
 import { search, recent, show } from './search.mjs';
@@ -31,6 +31,42 @@ import { runAnalyst } from './analyst.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const pkg = require(join(__dirname, '..', 'package.json'));
+const MIN_GITLEAKS_VERSION = [8, 30, 1];
+const SECRET_SCANNER_REMEDIATION =
+  'Gitleaks 8.30.1 or newer is required; install or upgrade Gitleaks. Scanner failure refuses provider execution.';
+
+function secretScannerError() {
+  const error = new RcaError('SECRET_SCANNER_UNAVAILABLE');
+  error.message = SECRET_SCANNER_REMEDIATION;
+  return error;
+}
+
+function checkSecretScanner(execFile, cwd) {
+  let output;
+  try {
+    output = execFile('gitleaks', ['version'], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 5000,
+      maxBuffer: 64 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    }).trim();
+  } catch {
+    throw secretScannerError();
+  }
+
+  const match = output.match(/(?:^|\D)(\d+)\.(\d+)\.(\d+)(?:\D|$)/);
+  if (!match) throw secretScannerError();
+  const actual = match.slice(1, 4).map(Number);
+  for (let index = 0; index < MIN_GITLEAKS_VERSION.length; index += 1) {
+    if (actual[index] > MIN_GITLEAKS_VERSION[index]) break;
+    if (actual[index] < MIN_GITLEAKS_VERSION[index]) {
+      throw secretScannerError();
+    }
+  }
+  return output.split(/\r?\n/, 1)[0];
+}
 
 export function createProgram() {
   const program = new Command();
@@ -79,7 +115,7 @@ export function createProgram() {
                 timeout: 30000,
               });
             } else {
-              result = spawnSync('bash', [hookSh], {
+              result = spawnSync('bash', [hookSh, cwd], {
                 cwd,
                 shell: false,
                 stdio: ['ignore', 'pipe', 'pipe'],
@@ -118,7 +154,9 @@ export function createProgram() {
               process.stderr.write(
                 `⚠ ${cliName} is not on PATH — the post-commit hook will not fire.\n`,
               );
-              process.stderr.write(`  Run: cd ${join(__dirname, '..')} && npm link\n`);
+              process.stderr.write(
+                `  Install ${cliName} on PATH before relying on this repository's local hook.\n`,
+              );
             }
           } catch {
             // Ignore — best-effort check
@@ -135,7 +173,7 @@ export function createProgram() {
 
   program
     .command('setup')
-    .description('Interactive setup wizard — configure vault, API keys, and environment')
+    .description('Interactive setup wizard — configure local RCA output and prerequisites')
     .action(async () => {
       function ask(question) {
         const rl = createInterface({ input: process.stdin, output: process.stderr });
@@ -218,7 +256,7 @@ export function createProgram() {
         // provider isolation boundary is implemented.
         setConfigValue(configPath, 'auto_generate', 'false');
         process.stderr.write(
-          `⚠ set auto_generate=false — provider isolation is unavailable; automatic generation is unsafe\n`,
+          `⚠ set auto_generate=false — automatic generation requires Gitleaks 8.30.1 or newer, an effective local post-commit hook, and approved provider isolation, which is unavailable; run "${cliName} doctor" for remediation.\n`,
         );
 
         // Step 5: Set obsidian.enabled=true with vault path
@@ -259,15 +297,14 @@ export function createProgram() {
           () => execSync('rg', ['--version'], { encoding: 'utf8' }).trim().split('\n')[0],
         );
 
+        doctorCheck('secret-scanner', () => checkSecretScanner(execSync, cwd));
+
         let setupProvider = 'claude';
         let setupBinary = 'claude';
         try {
           const cfg = loadConfig({ cwd, configPath });
           setupProvider = cfg.provider || 'claude';
-          setupBinary =
-            setupProvider === 'codex'
-              ? cfg.codex?.binary || 'codex'
-              : cfg.claude?.binary || 'claude';
+          setupBinary = setupProvider === 'codex' ? 'codex' : 'claude';
         } catch {
           /* fall back to claude defaults */
         }
@@ -286,7 +323,9 @@ export function createProgram() {
         // Step 7: Print summary
         process.stderr.write('\n--- Setup complete ---\n');
         process.stderr.write(`  Config:       ${configPath}\n`);
-        process.stderr.write(`  auto_generate: false (provider isolation unavailable)\n`);
+        process.stderr.write(
+          `  auto_generate: false (scanner, local hook, and provider isolation required)\n`,
+        );
         if (vaultPath) {
           process.stderr.write(`  Vault:        ${vaultPath}\n`);
         } else {
@@ -310,14 +349,15 @@ export function createProgram() {
 
   program
     .command('generate')
-    .description('Generate an RCA for a commit')
+    .description(
+      'Generate an RCA for a commit; Gitleaks 8.30.1 or newer is required and scanner failure refuses provider execution',
+    )
     .option('--from <ref>', 'Git ref to analyze', 'HEAD')
     .option('--since <ref>', 'Batch-generate RCAs for all fix: commits since <ref>')
     .option('--message <msg>', 'Override commit message')
     .option('--logs <file>', 'Attach log file')
     .option('--dry-run', 'Print what would be generated without writing')
     .option('--no-obsidian', 'Skip Obsidian sync')
-    .option('--no-secret-scan', 'Skip secret scanning of diff')
     .option(
       '--analyze',
       'Run rca-analyst quality check after generation; prompt to amend on TTY if REVISE/REJECT',
@@ -490,14 +530,6 @@ export function createProgram() {
 
         progress.start('Extracting context');
         const context = await buildContext({ cwd, ref: opts.from });
-
-        progress.update('Scanning for secrets');
-        if (!opts.secretScan && scanForSecrets(context.diff)) {
-          progress.fail('Secret scan failed');
-          throw new RcaError('INTERNAL', {
-            message: 'Diff may contain secrets. Use --no-secret-scan to bypass.',
-          });
-        }
 
         const defaultSystemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
         const defaultSchemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
@@ -793,7 +825,7 @@ export function createProgram() {
 
   program
     .command('doctor')
-    .description('Check environment: Node, claude, rg, git, vault')
+    .description('Check local hooks, Gitleaks, provider safety, and RCA dependencies')
     .action(async () => {
       const { execFileSync: execSync } = await import('node:child_process');
       const { existsSync: fsExistsSync, readFileSync: fsReadFileSync } = await import('node:fs');
@@ -830,6 +862,13 @@ export function createProgram() {
         return ver;
       });
 
+      let scannerHealthy = false;
+      check('secret-scanner', () => {
+        const detail = checkSecretScanner(execSync, program.opts().cwd || process.cwd());
+        scannerHealthy = true;
+        return detail;
+      });
+
       // Check the binary for the configured LLM provider (claude or codex), not
       // a hardcoded one — a codex user must not fail doctor for lacking claude.
       let providerName = 'claude';
@@ -838,8 +877,7 @@ export function createProgram() {
         const cwd = program.opts().cwd || process.cwd();
         const cfg = loadConfig({ cwd, configPath: program.opts().config });
         providerName = cfg.provider || 'claude';
-        providerBinary =
-          providerName === 'codex' ? cfg.codex?.binary || 'codex' : cfg.claude?.binary || 'claude';
+        providerBinary = providerName === 'codex' ? 'codex' : 'claude';
       } catch {
         /* fall back to claude defaults */
       }
@@ -877,6 +915,7 @@ export function createProgram() {
       } catch {
         hooksDir = null;
       }
+      let hookHealthy = false;
       if (!hooksDir) {
         note('hook', 'WARN', 'not a git repository');
       } else {
@@ -886,6 +925,7 @@ export function createProgram() {
         } else if (!fsReadFileSync(hookFile, 'utf8').includes('claude-rca')) {
           note('hook', 'WARN', `post-commit at ${hookFile} is not an RCA hook`);
         } else {
+          hookHealthy = true;
           note('hook', 'ok', hookFile);
         }
       }
@@ -895,16 +935,20 @@ export function createProgram() {
           const autoCfg = loadConfig({ cwd: doctorCwd, configPath: program.opts().config });
           if (autoCfg.auto_generate === true) {
             failures++;
+            const unavailable = [];
+            if (!scannerHealthy) unavailable.push('secret scanner');
+            if (!hookHealthy) unavailable.push('local hook');
+            unavailable.push('provider isolation');
             note(
               'auto-gen',
               'FAIL',
-              'unsafe — provider isolation is unavailable; automatic generation cannot run',
+              `unsafe — ${unavailable.join(', ')} unavailable; automatic provider execution is refused`,
             );
           } else {
             note(
               'auto-gen',
               'WARN',
-              'disabled — provider isolation is unavailable; automatic generation cannot run',
+              'disabled — scanner, local hook, and provider isolation are required; automatic provider execution is unavailable',
             );
           }
         } catch {

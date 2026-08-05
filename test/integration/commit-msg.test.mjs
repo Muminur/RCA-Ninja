@@ -186,24 +186,35 @@ describe('commit-msg hook — Conventional Commits validation', () => {
 
 describe('commit-msg hook — install', () => {
   let tmp;
+  let testEnv;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), 'claude-rca-cm-install-'));
-    execFileSync('git', ['init'], { cwd: tmp, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: tmp, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: tmp, stdio: 'ignore' });
+    const home = mkdtempSync(join(tmpdir(), 'claude-rca-cm-home-'));
+    const gitconfig = join(home, 'global.gitconfig');
+    writeFileSync(gitconfig, '[user]\n\tname = Test\n\temail = test@example.invalid\n');
+    testEnv = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      GIT_CONFIG_GLOBAL: gitconfig,
+      GIT_TERMINAL_PROMPT: '0',
+    };
+    execFileSync('git', ['init'], { cwd: tmp, stdio: 'ignore', env: testEnv });
     // Override any inherited core.hooksPath so tests target the local repo.
     execFileSync('git', ['config', '--local', 'core.hooksPath', join(tmp, '.git', 'hooks')], {
       cwd: tmp,
       stdio: 'ignore',
+      env: testEnv,
     });
     mkdirSync(join(tmp, '.git', 'hooks'), { recursive: true });
   });
 
   it('install-hook.sh installs commit-msg hook', skipIfNoBash, () => {
-    const result = spawnSync('bash', [INSTALL_HOOK], {
+    const result = spawnSync('bash', [INSTALL_HOOK, tmp], {
       cwd: tmp,
       encoding: 'utf8',
+      env: testEnv,
     });
     assert.strictEqual(result.status, 0, `install failed: ${result.stderr}`);
     const dest = join(tmp, '.git', 'hooks', 'commit-msg');
@@ -211,10 +222,10 @@ describe('commit-msg hook — install', () => {
   });
 
   it('install-hook.sh is idempotent for commit-msg', skipIfNoBash, () => {
-    const opts = { cwd: tmp, encoding: 'utf8' };
-    const r1 = spawnSync('bash', [INSTALL_HOOK], opts);
+    const opts = { cwd: tmp, encoding: 'utf8', env: testEnv };
+    const r1 = spawnSync('bash', [INSTALL_HOOK, tmp], opts);
     assert.strictEqual(r1.status, 0);
-    const r2 = spawnSync('bash', [INSTALL_HOOK], opts);
+    const r2 = spawnSync('bash', [INSTALL_HOOK, tmp], opts);
     assert.strictEqual(r2.status, 0, `second install must succeed: ${r2.stderr}`);
   });
 
@@ -226,9 +237,10 @@ describe('commit-msg hook — install', () => {
     } catch {
       /* windows */
     }
-    const result = spawnSync('bash', [INSTALL_HOOK], {
+    const result = spawnSync('bash', [INSTALL_HOOK, tmp], {
       cwd: tmp,
       encoding: 'utf8',
+      env: testEnv,
     });
     assert.notStrictEqual(result.status, 0, 'install must refuse foreign hook');
     // Make sure the foreign hook content is preserved

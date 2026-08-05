@@ -1,8 +1,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+import { delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -10,91 +17,108 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const INSTALLER = join(ROOT, 'hooks', 'install-hook.mjs');
 
-/**
- * The global fallback exists so a fresh clone — which has no .git/hooks content
- * of its own — still gets a post-commit hook instead of silently getting none.
- * It has to be installable from the template, or the copy goes stale the next
- * time the template changes, recreating the silent failure it was meant to fix.
- */
-function runGlobalInstall(home) {
-  const gitconfig = join(home, '.gitconfig');
-  writeFileSync(gitconfig, '');
-  const res = spawnSync('node', [INSTALLER, '--global'], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      GIT_CONFIG_GLOBAL: gitconfig,
-    },
-  });
-  return { ...res, gitconfig };
+function makeSandbox(prefix, { globalHooksPath } = {}) {
+  const home = mkdtempSync(join(tmpdir(), `${prefix}-home-`));
+  const gitconfig = join(home, 'global.gitconfig');
+  const hooksConfig = globalHooksPath
+    ? `[core]\n\thooksPath = ${globalHooksPath.replaceAll('\\', '/')}\n`
+    : '';
+  const initialConfig = `${hooksConfig}[user]\n\tname = Isolated Test\n\temail = test@example.invalid\n`;
+  writeFileSync(gitconfig, initialConfig);
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    GIT_CONFIG_GLOBAL: gitconfig,
+    GIT_TERMINAL_PROMPT: '0',
+  };
+  return { home, gitconfig, initialConfig, env };
 }
 
-function makeHome() {
-  return mkdtempSync(join(tmpdir(), 'claude-rca-global-'));
-}
-
-describe('install-hook --global', () => {
-  it('writes post-commit into the global hooks dir from the template', () => {
-    const home = makeHome();
-    const { status, stdout, gitconfig } = runGlobalInstall(home);
-
-    assert.strictEqual(status, 0, `installer must succeed, got:\n${stdout}`);
-    const dest = join(home, '.git-hooks', 'post-commit');
-    assert.ok(existsSync(dest), `expected a hook at ${dest}, output:\n${stdout}`);
-    assert.strictEqual(
-      readFileSync(dest, 'utf8'),
-      readFileSync(join(ROOT, 'hooks', 'post-commit'), 'utf8'),
-      'the global hook must be a verbatim copy of the template',
-    );
-    assert.ok(readFileSync(gitconfig, 'utf8').includes('hooksPath'), 'must set core.hooksPath');
-  });
-
-  it('never installs commit-msg globally', () => {
-    const home = makeHome();
-    runGlobalInstall(home);
-    assert.ok(
-      !existsSync(join(home, '.git-hooks', 'commit-msg')),
-      'a global commit-msg would reject non-conventional commits in every repo on the machine',
-    );
-  });
-
-  it('is idempotent and refreshes a stale copy', () => {
-    const home = makeHome();
-    runGlobalInstall(home);
-    const dest = join(home, '.git-hooks', 'post-commit');
-    writeFileSync(dest, '#!/usr/bin/env bash\n# claude-rca stale copy\nexit 0\n');
-
-    const { status } = runGlobalInstall(home);
-
-    assert.strictEqual(status, 0);
-    assert.strictEqual(
-      readFileSync(dest, 'utf8'),
-      readFileSync(join(ROOT, 'hooks', 'post-commit'), 'utf8'),
-      're-running must refresh a stale hook back to the template',
-    );
-  });
-
-  it('respects an existing global core.hooksPath instead of relocating it', () => {
-    const home = makeHome();
-    const custom = join(home, 'my-hooks');
-    mkdirSync(custom, { recursive: true });
-    const gitconfig = join(home, '.gitconfig');
-    writeFileSync(gitconfig, '');
-    execFileSync('git', ['config', '--global', 'core.hooksPath', custom], {
-      env: { ...process.env, HOME: home, USERPROFILE: home, GIT_CONFIG_GLOBAL: gitconfig },
+function makeRepo(env, { setLocalHooksPath = true } = {}) {
+  const repo = mkdtempSync(join(tmpdir(), 'claude-rca-local-hook-'));
+  execFileSync('git', ['init', '-q'], { cwd: repo, env });
+  if (setLocalHooksPath) {
+    execFileSync('git', ['config', '--local', 'core.hooksPath', join(repo, '.git', 'hooks')], {
+      cwd: repo,
+      env,
     });
+  }
+  return repo;
+}
 
-    const res = spawnSync('node', [INSTALLER, '--global'], {
+function installNpmTrap(root) {
+  const binDir = join(root, 'trap-bin');
+  const marker = join(root, 'npm-was-invoked');
+  mkdirSync(binDir, { recursive: true });
+  if (process.platform === 'win32') {
+    writeFileSync(
+      join(binDir, 'npm.cmd'),
+      `@echo off\r\n> "${marker}" echo invoked\r\nexit /b 99\r\n`,
+      'utf8',
+    );
+  } else {
+    const trap = join(binDir, 'npm');
+    writeFileSync(trap, `#!/bin/sh\nprintf invoked > "${marker}"\nexit 99\n`, 'utf8');
+    chmodSync(trap, 0o755);
+  }
+  return { marker, path: `${binDir}${delimiter}${process.env.PATH || ''}` };
+}
+
+describe('install-hook local-only safety', () => {
+  it('--global refuses without writing hooks or mutating global Git config', () => {
+    const { home, gitconfig, initialConfig, env } = makeSandbox('claude-rca-global-refuse-');
+    const result = spawnSync('node', [INSTALLER, '--global'], { encoding: 'utf8', env });
+
+    assert.notStrictEqual(result.status, 0);
+    assert.match(result.stderr, /global hook installation is not supported/i);
+    assert.strictEqual(readFileSync(gitconfig, 'utf8'), initialConfig);
+    assert.strictEqual(existsSync(join(home, '.git-hooks', 'post-commit')), false);
+    assert.strictEqual(existsSync(join(home, '.git-hooks', 'commit-msg')), false);
+  });
+
+  it('installs only into an explicit repository and leaves global config byte-identical', () => {
+    const { home, gitconfig, initialConfig, env } = makeSandbox('claude-rca-local-install-');
+    const repo = makeRepo(env);
+    const npmTrap = installNpmTrap(home);
+
+    const result = spawnSync('node', [INSTALLER, repo], {
       encoding: 'utf8',
-      env: { ...process.env, HOME: home, USERPROFILE: home, GIT_CONFIG_GLOBAL: gitconfig },
+      env: { ...env, PATH: npmTrap.path },
     });
 
-    assert.strictEqual(res.status, 0, res.stdout + res.stderr);
-    assert.ok(
-      existsSync(join(custom, 'post-commit')),
-      'must install into the already-configured global hooks dir',
-    );
+    assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+    assert.ok(existsSync(join(repo, '.git', 'hooks', 'post-commit')));
+    assert.ok(existsSync(join(repo, '.git', 'hooks', 'commit-msg')));
+    assert.strictEqual(readFileSync(gitconfig, 'utf8'), initialConfig);
+    assert.strictEqual(existsSync(npmTrap.marker), false, 'installer must never invoke npm link');
+  });
+
+  it('refuses an implicit current-directory installation', () => {
+    const { gitconfig, initialConfig, env } = makeSandbox('claude-rca-implicit-refuse-');
+    const repo = makeRepo(env);
+
+    const result = spawnSync('node', [INSTALLER], { cwd: repo, encoding: 'utf8', env });
+
+    assert.notStrictEqual(result.status, 0);
+    assert.match(result.stderr, /explicit repository path/i);
+    assert.strictEqual(readFileSync(gitconfig, 'utf8'), initialConfig);
+    assert.strictEqual(existsSync(join(repo, '.git', 'hooks', 'post-commit')), false);
+  });
+
+  it('refuses an inherited global hooksPath without writing shared hooks', () => {
+    const sharedHooks = mkdtempSync(join(tmpdir(), 'claude-rca-shared-hooks-'));
+    const { gitconfig, initialConfig, env } = makeSandbox('claude-rca-inherited-hooks-', {
+      globalHooksPath: sharedHooks,
+    });
+    const repo = makeRepo(env, { setLocalHooksPath: false });
+
+    const result = spawnSync('node', [INSTALLER, repo], { encoding: 'utf8', env });
+
+    assert.notStrictEqual(result.status, 0);
+    assert.match(result.stderr, /inherited core\.hooksPath/i);
+    assert.strictEqual(existsSync(join(sharedHooks, 'post-commit')), false);
+    assert.strictEqual(existsSync(join(sharedHooks, 'commit-msg')), false);
+    assert.strictEqual(readFileSync(gitconfig, 'utf8'), initialConfig);
   });
 });

@@ -1,6 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createProgram } from '../../src/cli.mjs';
+import { installGitleaksStub, scannerRejectPayload } from '../fixtures/gitleaks-test-env.mjs';
 
 const EXIT_SENTINEL = Symbol('mock-exit');
 
@@ -36,6 +40,43 @@ describe('mcp-server module', () => {
   it('exports startMcpServer as a function', async () => {
     const mod = await import('../../src/mcp-server.mjs');
     assert.strictEqual(typeof mod.startMcpServer, 'function');
+  });
+
+  it('returns a static error when central generation rejects a scanner payload', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-mcp-scanner-'));
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = installGitleaksStub(dir);
+      const { dispatchToolRequest } = await import('../../src/mcp-server.mjs');
+      assert.strictEqual(typeof dispatchToolRequest, 'function');
+
+      const result = await dispatchToolRequest({
+        name: 'rca_generate',
+        args: { cwd: dir, ref: 'HEAD' },
+        cfg: { output_dir: join(dir, 'rca') },
+        dependencies: {
+          buildContext: async () => ({
+            short_hash: 'abc1234',
+            branch: 'main',
+            commit_message: 'fix: scanner rejection',
+            files_changed: ['src/example.mjs'],
+            diff: scannerRejectPayload(),
+            logs: null,
+            timestamp_utc: '2026-08-05T00:00:00.000Z',
+          }),
+        },
+      });
+
+      const text = result.content.map((entry) => entry.text).join('\n');
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(text, 'Error: The secret scanner blocked provider execution.');
+      assert.doesNotMatch(text, /sensitive diagnostics/i);
+      assert.doesNotMatch(text, /SCANNER_REJECT/);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

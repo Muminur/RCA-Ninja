@@ -1,17 +1,33 @@
 #!/usr/bin/env bash
-# Installs claude-rca git hooks: post-commit and commit-msg.
+# Installs claude-rca git hooks into one explicitly supplied local repository.
 # Idempotent. Refuses to overwrite a non-claude-rca hook.
 set -eu
 
-# Verify bash is functional
 if [ -z "${BASH_VERSION:-}" ]; then
   echo "ERROR: bash is required. Install Git for Windows: https://git-scm.com/download/win"
   exit 1
 fi
 
-HOOK_DIR="$(git rev-parse --git-path hooks)"
+if [ "$#" -ne 1 ] || [ "$1" = "--global" ]; then
+  echo "ERROR: hook installation requires one explicit local repository path." >&2
+  exit 1
+fi
+
+TARGET_REPO="$1"
+if ! HOOK_DIR="$(git -C "$TARGET_REPO" rev-parse --path-format=absolute --git-path hooks 2>/dev/null)"; then
+  echo "ERROR: not a git repository: $TARGET_REPO" >&2
+  exit 1
+fi
+
+EFFECTIVE_HOOKS_PATH="$(git -C "$TARGET_REPO" config --get core.hooksPath 2>/dev/null || true)"
+LOCAL_HOOKS_PATH="$(git -C "$TARGET_REPO" config --local --get core.hooksPath 2>/dev/null || true)"
+if [ -n "$EFFECTIVE_HOOKS_PATH" ] && [ -z "$LOCAL_HOOKS_PATH" ]; then
+  echo "ERROR: refusing inherited core.hooksPath; configure an explicit repository-local hooks path first." >&2
+  exit 1
+fi
+
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_DIR="$(cd "${SRC_DIR}/.." && pwd)"
+mkdir -p "$HOOK_DIR"
 
 install_one() {
   local NAME="$1"
@@ -35,15 +51,3 @@ install_one() {
 
 install_one "post-commit"
 install_one "commit-msg"
-
-# Attempt npm link so claude-rca is on PATH globally
-if ! command -v claude-rca >/dev/null 2>&1; then
-  echo "claude-rca not on PATH — attempting npm link..."
-  if (cd "${REPO_DIR}" && npm link 2>/dev/null); then
-    echo "✓ npm link succeeded — claude-rca is now globally accessible"
-  else
-    echo "⚠ npm link failed. Run manually: cd ${REPO_DIR} && npm link"
-  fi
-else
-  echo "✓ claude-rca already on PATH: $(command -v claude-rca)"
-fi

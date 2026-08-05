@@ -6,7 +6,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.mjs';
 import { buildContext } from './context.mjs';
-import { generate, scanForSecrets } from './generator.mjs';
+import { generate } from './generator.mjs';
+import { RcaError } from './errors.mjs';
 import { renderRca } from './renderer.mjs';
 import { writeRca } from './writer.mjs';
 import { search, recent, show } from './search.mjs';
@@ -235,25 +236,20 @@ function getObsidianClient(cfg) {
   });
 }
 
-async function handleTool(name, args, cfg) {
+async function handleTool(name, args, cfg, dependencies = {}) {
   const cwd = args.cwd || process.cwd();
 
   switch (name) {
     case 'rca_generate': {
       const ref = args.ref || 'HEAD';
-      const context = await buildContext({ cwd, ref });
-
-      if (scanForSecrets(context.diff)) {
-        return {
-          content: [{ type: 'text', text: 'Diff contains potential secrets. Generation aborted.' }],
-          isError: true,
-        };
-      }
+      const buildContextFn = dependencies.buildContext || buildContext;
+      const generateFn = dependencies.generate || generate;
+      const context = await buildContextFn({ cwd, ref });
 
       const systemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
       const schemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
 
-      const { rca } = await generate({ context, config: cfg, systemPromptPath, schemaPath });
+      const { rca } = await generateFn({ context, config: cfg, systemPromptPath, schemaPath });
       const md = renderRca(rca, context);
       const date = context.timestamp_utc.slice(0, 10);
 
@@ -507,6 +503,24 @@ async function handleTool(name, args, cfg) {
   }
 }
 
+function staticToolError(err) {
+  if (err?.code === 'SECRET_SCAN_FAILED' || err?.code === 'SECRET_SCANNER_UNAVAILABLE') {
+    return new RcaError(err.code).message;
+  }
+  return err instanceof Error ? err.message : 'Tool request failed.';
+}
+
+export async function dispatchToolRequest({ name, args = {}, cfg, dependencies } = {}) {
+  try {
+    return await handleTool(name, args, cfg, dependencies);
+  } catch (err) {
+    return {
+      content: [{ type: 'text', text: `Error: ${staticToolError(err)}` }],
+      isError: true,
+    };
+  }
+}
+
 export async function startMcpServer({ cwd } = {}) {
   const cfg = loadConfig({ cwd });
   const tools = getToolsForConfig(cfg);
@@ -520,14 +534,7 @@ export async function startMcpServer({ cwd } = {}) {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    try {
-      return await handleTool(name, args || {}, cfg);
-    } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${err.message}` }],
-        isError: true,
-      };
-    }
+    return dispatchToolRequest({ name, args: args || {}, cfg });
   });
 
   const transport = new StdioServerTransport();

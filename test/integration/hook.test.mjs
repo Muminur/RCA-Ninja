@@ -9,15 +9,19 @@ import {
   copyFileSync,
   chmodSync,
 } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { delimiter, join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const INSTALL_HOOK = join(ROOT, 'hooks', 'install-hook.sh');
 const POST_COMMIT = join(ROOT, 'hooks', 'post-commit');
+const BASH =
+  process.platform === 'win32' && existsSync('C:\\Program Files\\Git\\bin\\bash.exe')
+    ? 'C:\\Program Files\\Git\\bin\\bash.exe'
+    : 'bash';
 
 function git(args, cwd, env = {}) {
   return execFileSync('git', args, {
@@ -145,11 +149,66 @@ describe('hooks', () => {
     );
   });
 
-  it('install-hook.sh attempts npm link', () => {
-    const src = readFileSync(INSTALL_HOOK, 'utf8');
-    assert.ok(
-      src.includes('npm link') || src.includes('npm-link'),
-      'install-hook.sh should attempt npm link to make claude-rca globally accessible',
-    );
+  it('install-hook.sh installs locally without invoking npm or mutating global config', () => {
+    const home = mkdtempSync(join(tmpdir(), 'claude-rca-hook-home-'));
+    const gitconfig = join(home, 'global.gitconfig');
+    const initialConfig = '[user]\n\tname = Test\n\temail = test@example.invalid\n';
+    writeFileSync(gitconfig, initialConfig);
+    const trapDir = join(home, 'trap-bin');
+    const marker = join(home, 'npm-was-invoked');
+    mkdirSync(trapDir, { recursive: true });
+    const npmTrap = join(trapDir, 'npm');
+    writeFileSync(npmTrap, `#!/bin/sh\nprintf invoked > "${marker}"\nexit 99\n`, 'utf8');
+    try {
+      chmodSync(npmTrap, 0o755);
+    } catch {
+      /* windows */
+    }
+    const env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      GIT_CONFIG_GLOBAL: gitconfig,
+      PATH:
+        process.platform === 'win32'
+          ? [
+              trapDir,
+              'C:\\Program Files\\Git\\cmd',
+              'C:\\Program Files\\Git\\usr\\bin',
+              'C:\\Windows\\System32',
+            ].join(delimiter)
+          : `${trapDir}${delimiter}/usr/bin${delimiter}/bin`,
+      GIT_TERMINAL_PROMPT: '0',
+    };
+    git(['config', '--local', 'core.hooksPath', join(tmp, '.git', 'hooks')], tmp, env);
+
+    const result = spawnSync(BASH, [INSTALL_HOOK, tmp], { cwd: tmp, encoding: 'utf8', env });
+
+    assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+    assert.strictEqual(existsSync(marker), false, 'shell installer must never invoke npm link');
+    assert.strictEqual(readFileSync(gitconfig, 'utf8'), initialConfig);
+  });
+
+  it('install-hook.sh refuses an inherited global hooksPath without writing there', () => {
+    const home = mkdtempSync(join(tmpdir(), 'claude-rca-hook-inherited-home-'));
+    const sharedHooks = mkdtempSync(join(tmpdir(), 'claude-rca-hook-shared-'));
+    const gitconfig = join(home, 'global.gitconfig');
+    const initialConfig = `[core]\n\thooksPath = ${sharedHooks.replaceAll('\\', '/')}\n`;
+    writeFileSync(gitconfig, initialConfig);
+    const env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      GIT_CONFIG_GLOBAL: gitconfig,
+      GIT_TERMINAL_PROMPT: '0',
+    };
+
+    const result = spawnSync(BASH, [INSTALL_HOOK, tmp], { cwd: tmp, encoding: 'utf8', env });
+
+    assert.notStrictEqual(result.status, 0);
+    assert.match(result.stderr, /inherited core\.hooksPath/i);
+    assert.strictEqual(existsSync(join(sharedHooks, 'post-commit')), false);
+    assert.strictEqual(existsSync(join(sharedHooks, 'commit-msg')), false);
+    assert.strictEqual(readFileSync(gitconfig, 'utf8'), initialConfig);
   });
 });

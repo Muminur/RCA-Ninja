@@ -68,6 +68,14 @@ function tryLoadJson(path) {
 }
 
 export const PROJECT_CONFIG_NAME = '.claude-rca.json';
+const LEGACY_FIXED_PROVIDER_KEYS = new Set([
+  'claude.binary',
+  'claude.use_bare',
+  'claude.permission_mode',
+  'claude.allowed_tools',
+  'codex.binary',
+  'codex.sandbox',
+]);
 
 /** Case/separator-insensitive path compare (Windows drive + slash variance). */
 function samePath(a, b) {
@@ -218,7 +226,7 @@ export function getConfigValue(cfg, keyPath) {
 }
 
 export function setConfigValue(configPath, keyPath, rawValue) {
-  if (!VALID_KEYS.has(keyPath)) {
+  if (!VALID_KEYS.has(keyPath) || LEGACY_FIXED_PROVIDER_KEYS.has(keyPath)) {
     throw new RcaError('INVALID_CONFIG_KEY', { key: keyPath });
   }
 

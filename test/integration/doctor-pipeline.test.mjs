@@ -1,115 +1,194 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+} from 'node:fs';
+import { delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { pathWithoutGitleaks } from '../fixtures/gitleaks-test-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const BIN = join(ROOT, 'bin', 'claude-rca');
 const POST_COMMIT = join(ROOT, 'hooks', 'post-commit');
 
-function git(args, cwd) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+function makeIsolatedEnv(prefix) {
+  const home = mkdtempSync(join(tmpdir(), `${prefix}-home-`));
+  const gitconfig = join(home, 'global.gitconfig');
+  writeFileSync(gitconfig, '[user]\n\tname = Test\n\temail = test@example.invalid\n');
+  return {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    GIT_CONFIG_GLOBAL: gitconfig,
+    GIT_TERMINAL_PROMPT: '0',
+  };
+}
+
+function git(args, cwd, env) {
+  return execFileSync('git', args, { cwd, env, encoding: 'utf8' }).trim();
 }
 
 function makeRepo(prefix) {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  git(['init', '-q', '-b', 'main'], dir);
-  git(['config', 'user.email', 't@t.local'], dir);
-  git(['config', 'user.name', 'test'], dir);
-  return dir;
+  const repo = mkdtempSync(join(tmpdir(), prefix));
+  const env = makeIsolatedEnv(prefix);
+  git(['init', '-q', '-b', 'main'], repo, env);
+  git(['config', '--local', 'core.hooksPath', join(repo, '.git', 'hooks')], repo, env);
+  return { repo, env };
 }
 
-function runDoctor(cwd) {
-  return spawnSync('node', [BIN, '--cwd', cwd, 'doctor'], { encoding: 'utf8', cwd });
+function runDoctor(repo, env) {
+  return spawnSync('node', [BIN, '--cwd', repo, 'doctor'], {
+    encoding: 'utf8',
+    cwd: repo,
+    env,
+  });
 }
 
-/**
- * doctor previously checked only external tools (node/git/rg/claude), so a repo
- * whose RCA pipeline was completely dead still reported healthy. These checks
- * make the outage that hid for three days visible in one command.
- */
+function installVersionedGitleaks(root, version = '8.30.1') {
+  const binDir = join(root, 'scanner-bin');
+  mkdirSync(binDir, { recursive: true });
+
+  if (process.platform === 'win32') {
+    const sourcePath = join(binDir, 'VersionedGitleaks.cs');
+    const executable = join(binDir, 'gitleaks.exe');
+    writeFileSync(
+      sourcePath,
+      `using System;\npublic class VersionedGitleaks {\n  public static int Main(string[] args) {\n    Console.WriteLine("gitleaks version ${version}");\n    return 0;\n  }\n}\n`,
+      'utf8',
+    );
+    const quote = (value) => value.replaceAll("'", "''");
+    const compile = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Add-Type -Path '${quote(sourcePath)}' -OutputAssembly '${quote(executable)}' -OutputType ConsoleApplication`,
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.strictEqual(compile.status, 0, compile.stderr);
+    assert.ok(existsSync(executable));
+  } else {
+    const executable = join(binDir, 'gitleaks');
+    writeFileSync(executable, `#!/bin/sh\nprintf 'gitleaks version ${version}\\n'\n`, 'utf8');
+    chmodSync(executable, 0o755);
+  }
+
+  return `${binDir}${delimiter}${process.env.PATH || ''}`;
+}
+
+function installLocalHook(repo) {
+  const hooksDir = join(repo, '.git', 'hooks');
+  mkdirSync(hooksDir, { recursive: true });
+  copyFileSync(POST_COMMIT, join(hooksDir, 'post-commit'));
+}
+
 describe('doctor checks the RCA pipeline itself', () => {
   it('WARNs on the config check when no config can be resolved', () => {
-    const repo = makeRepo('claude-rca-doc-noconfig-');
-    const { stdout } = runDoctor(repo);
+    const { repo, env } = makeRepo('claude-rca-doc-noconfig-');
+    const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
     assert.ok(/^config\s+WARN/m.test(stdout), `config must be reported WARN, got:\n${stdout}`);
   });
 
   it('WARNs on the hook check when no post-commit hook is installed', () => {
-    const repo = makeRepo('claude-rca-doc-nohook-');
+    const { repo, env } = makeRepo('claude-rca-doc-nohook-');
     writeFileSync(join(repo, '.claude-rca.json'), JSON.stringify({ version: 1 }));
-    // Point at an empty hooks dir so the result does not depend on whether the
-    // machine running the tests has a global core.hooksPath fallback installed.
-    const empty = join(repo, 'empty-hooks');
-    mkdirSync(empty, { recursive: true });
-    git(['config', 'core.hooksPath', empty], repo);
 
-    const { stdout } = runDoctor(repo);
+    const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
     assert.ok(/^hook\s+WARN/m.test(stdout), `hook must be reported WARN, got:\n${stdout}`);
   });
 
-  it('reports configured auto-generation as unsafe while provider isolation is unavailable', () => {
-    const repo = makeRepo('claude-rca-doc-ok-');
+  it('fails the scanner check with static remediation and refuses unsafe auto-generation', () => {
+    const { repo, env } = makeRepo('claude-rca-doc-no-scanner-');
     writeFileSync(
       join(repo, '.claude-rca.json'),
       JSON.stringify({ version: 1, auto_generate: true }),
     );
-    const hooksDir = join(repo, '.git', 'hooks');
-    mkdirSync(hooksDir, { recursive: true });
-    copyFileSync(POST_COMMIT, join(hooksDir, 'post-commit'));
+    installLocalHook(repo);
 
-    const { stdout, status } = runDoctor(repo);
-    assert.ok(/^config\s+ok/m.test(stdout), `config must pass, got:\n${stdout}`);
-    assert.ok(/^hook\s+ok/m.test(stdout), `hook must pass, got:\n${stdout}`);
-    assert.ok(
-      /^provider-isolation\s+FAIL\s+.*(unavailable|no approved.*available)/im.test(stdout),
-      `provider isolation refusal must be reported, got:\n${stdout}`,
+    const { stdout, status } = runDoctor(repo, {
+      ...env,
+      PATH: pathWithoutGitleaks(),
+    });
+
+    assert.match(
+      stdout,
+      /^secret-scanner\s+FAIL\s+Gitleaks 8\.30\.1 or newer is required; install or upgrade Gitleaks\. Scanner failure refuses provider execution\.$/m,
     );
-    assert.ok(
-      /^auto-gen\s+FAIL\s+.*(unsafe|unavailable|disabled)/im.test(stdout),
-      `unsafe auto_generate state must not report ok, got:\n${stdout}`,
-    );
+    assert.doesNotMatch(stdout, /^secret-scanner\s+ok/m);
+    assert.match(stdout, /^auto-gen\s+FAIL\s+.*unsafe.*provider isolation/im);
+    assert.doesNotMatch(stdout, /^auto-gen\s+ok/m);
     assert.strictEqual(status, 70);
   });
 
-  it('reports auto_generate off as a WARN, not a silent pass', () => {
-    const repo = makeRepo('claude-rca-doc-off-');
+  it('reports a healthy scanner and local hook without claiming provider execution is safe', () => {
+    const { repo, env } = makeRepo('claude-rca-doc-healthy-inputs-');
+    writeFileSync(
+      join(repo, '.claude-rca.json'),
+      JSON.stringify({ version: 1, auto_generate: true }),
+    );
+    installLocalHook(repo);
+    const scannerRoot = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-scanner-'));
+
+    const { stdout, status } = runDoctor(repo, {
+      ...env,
+      PATH: installVersionedGitleaks(scannerRoot),
+    });
+
+    assert.match(stdout, /^secret-scanner\s+ok\s+gitleaks version 8\.30\.1$/m);
+    assert.match(stdout, /^hook\s+ok/m);
+    assert.match(stdout, /^provider-isolation\s+FAIL/m);
+    assert.match(stdout, /^auto-gen\s+FAIL\s+.*unsafe.*provider isolation/im);
+    assert.doesNotMatch(stdout, /^auto-gen\s+ok/m);
+    assert.strictEqual(status, 70);
+  });
+
+  it('fails closed when the installed Gitleaks version is below 8.30.1', () => {
+    const { repo, env } = makeRepo('claude-rca-doc-old-scanner-');
+    writeFileSync(join(repo, '.claude-rca.json'), JSON.stringify({ version: 1 }));
+    const scannerRoot = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-old-scanner-'));
+
+    const { stdout } = runDoctor(repo, {
+      ...env,
+      PATH: installVersionedGitleaks(scannerRoot, '8.29.9'),
+    });
+
+    assert.match(stdout, /^secret-scanner\s+FAIL\s+Gitleaks 8\.30\.1 or newer is required;/m);
+    assert.doesNotMatch(stdout, /^secret-scanner\s+ok/m);
+  });
+
+  it('reports auto_generate off as unavailable WARN with all prerequisites named', () => {
+    const { repo, env } = makeRepo('claude-rca-doc-off-');
     writeFileSync(
       join(repo, '.claude-rca.json'),
       JSON.stringify({ version: 1, auto_generate: false }),
     );
-    const hooksDir = join(repo, '.git', 'hooks');
-    mkdirSync(hooksDir, { recursive: true });
-    copyFileSync(POST_COMMIT, join(hooksDir, 'post-commit'));
+    installLocalHook(repo);
 
-    const { stdout } = runDoctor(repo);
-    assert.ok(
-      /^auto-gen\s+WARN/m.test(stdout),
-      `auto_generate=false must be visible as WARN, got:\n${stdout}`,
-    );
-    assert.ok(
-      /^auto-gen\s+WARN\s+.*(unavailable|disabled)/im.test(stdout),
-      `safe disabled state must explain provider unavailability, got:\n${stdout}`,
-    );
-    assert.ok(
-      !stdout.includes('config --set auto_generate=true'),
-      `doctor must not recommend unsafe enablement, got:\n${stdout}`,
-    );
+    const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
+    assert.match(stdout, /^auto-gen\s+WARN/m);
+    assert.match(stdout, /^auto-gen\s+WARN\s+.*disabled.*scanner.*hook.*provider isolation/im);
+    assert.doesNotMatch(stdout, /config --set auto_generate=true/);
   });
 
-  it('detects the hook through core.hooksPath, not just .git/hooks', () => {
-    const repo = makeRepo('claude-rca-doc-hookspath-');
+  it('detects the hook through the effective local core.hooksPath', () => {
+    const { repo, env } = makeRepo('claude-rca-doc-hookspath-');
     writeFileSync(join(repo, '.claude-rca.json'), JSON.stringify({ version: 1 }));
     const custom = join(repo, 'githooks');
     mkdirSync(custom, { recursive: true });
     copyFileSync(POST_COMMIT, join(custom, 'post-commit'));
-    git(['config', 'core.hooksPath', custom], repo);
+    git(['config', '--local', 'core.hooksPath', custom], repo, env);
 
-    const { stdout } = runDoctor(repo);
+    const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
     assert.ok(/^hook\s+ok/m.test(stdout), `hook must be found via core.hooksPath, got:\n${stdout}`);
   });
 });

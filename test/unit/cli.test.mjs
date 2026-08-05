@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,5 +89,24 @@ describe('cli', () => {
   it('generate --help shows --since option', () => {
     const out = execFileSync('node', [BIN, 'generate', '--help'], { encoding: 'utf8', cwd: ROOT });
     assert.ok(out.includes('--since'), 'generate --help should show --since option');
+  });
+
+  it('rejects the removed --no-secret-scan bypass before generation', () => {
+    const result = spawnSync('node', [BIN, 'generate', '--no-secret-scan'], {
+      encoding: 'utf8',
+      cwd: ROOT,
+    });
+
+    assert.notStrictEqual(result.status, 0);
+    assert.match(result.stderr, /unknown option ['"]--no-secret-scan['"]/i);
+    assert.doesNotMatch(result.stderr, /use --no-secret-scan to bypass/i);
+  });
+
+  it('documents the scanner requirement in generate help', () => {
+    const out = execFileSync('node', [BIN, 'generate', '--help'], { encoding: 'utf8', cwd: ROOT });
+
+    assert.match(out, /Gitleaks 8\.30\.1 or newer/i);
+    assert.match(out, /scanner\s+failure.*provider execution/i);
+    assert.doesNotMatch(out, /--no-secret-scan/);
   });
 });

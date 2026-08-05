@@ -2,11 +2,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createProgram } from '../../src/cli.mjs';
+import { pathWithoutGitleaks } from '../fixtures/gitleaks-test-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -42,9 +43,18 @@ describe('setup command', () => {
   it('keeps automatic generation disabled until provider isolation is available', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-setup-isolation-'));
     try {
+      const gitconfig = join(dir, 'global.gitconfig');
+      writeFileSync(gitconfig, '[user]\n\tname = Test\n\temail = test@example.invalid\n');
       const child = spawn('node', [BIN, '--cwd', dir, 'setup'], {
         cwd: ROOT,
-        env: { ...process.env, HOME: dir, USERPROFILE: dir },
+        env: {
+          ...process.env,
+          HOME: dir,
+          USERPROFILE: dir,
+          GIT_CONFIG_GLOBAL: gitconfig,
+          PATH: pathWithoutGitleaks(),
+          GIT_TERMINAL_PROMPT: '0',
+        },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       let stderr = '';
@@ -72,6 +82,9 @@ describe('setup command', () => {
       assert.strictEqual(config.auto_generate, false);
       assert.ok(/auto_generate:\s+false/i.test(stderr));
       assert.ok(/isolation.*unavailable|unavailable.*isolation/i.test(stderr));
+      assert.match(stderr, /Gitleaks 8\.30\.1 or newer/i);
+      assert.match(stderr, /local post-commit hook/i);
+      assert.match(stderr, /run ["']?claude-rca doctor/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
