@@ -23,30 +23,155 @@ const BASH =
     ? 'C:\\Program Files\\Git\\bin\\bash.exe'
     : 'bash';
 
-function git(args, cwd, env = {}) {
+function git(args, cwd, env) {
   return execFileSync('git', args, {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...env },
+    env,
   }).trim();
 }
 
+function makeIsolatedGitEnv(prefix) {
+  const home = mkdtempSync(join(tmpdir(), `${prefix}-home-`));
+  const gitconfig = join(home, 'global.gitconfig');
+  writeFileSync(gitconfig, '[user]\n\tname = Test\n\temail = test@example.invalid\n');
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    const normalizedKey = key.toUpperCase();
+    if (
+      normalizedKey.startsWith('GIT_CONFIG_') ||
+      [
+        'HOME',
+        'USERPROFILE',
+        'XDG_CONFIG_HOME',
+        'GIT_DIR',
+        'GIT_WORK_TREE',
+        'GIT_COMMON_DIR',
+        'GIT_TEMPLATE_DIR',
+      ].includes(normalizedKey)
+    ) {
+      delete env[key];
+    }
+  }
+  return {
+    ...env,
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: join(home, 'xdg'),
+    GIT_CONFIG_GLOBAL: gitconfig,
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_ATTR_NOSYSTEM: '1',
+    GIT_TERMINAL_PROMPT: '0',
+  };
+}
+
 function setupRepo(tmp) {
-  git(['init'], tmp);
-  git(['config', 'user.email', 'test@test.com'], tmp);
-  git(['config', 'user.name', 'Test'], tmp);
+  const env = makeIsolatedGitEnv('claude-rca-hook-setup');
+  git(['init', '-q', '-b', 'main'], tmp, env);
+  git(['config', '--local', 'core.hooksPath', join(tmp, '.git', 'hooks')], tmp, env);
+  git(['config', '--local', 'user.email', 'test@test.com'], tmp, env);
+  git(['config', '--local', 'user.name', 'Test'], tmp, env);
   mkdirSync(join(tmp, '.git', 'hooks'), { recursive: true });
   writeFileSync(join(tmp, 'file.js'), 'const x = 1;\n');
-  git(['add', '.'], tmp);
-  git(['commit', '-m', 'feat: initial commit'], tmp);
+  git(['add', 'file.js'], tmp, env);
+  git(['commit', '-m', 'feat: initial commit'], tmp, env);
+  return env;
 }
 
 describe('hooks', () => {
   let tmp;
+  let testGitEnv;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), 'claude-rca-hook-'));
-    setupRepo(tmp);
+    testGitEnv = setupRepo(tmp);
+  });
+
+  it('isolates repository setup from an inherited user post-commit hook', () => {
+    const hostileHome = mkdtempSync(join(tmpdir(), 'claude-rca-hostile-home-'));
+    const sharedHooks = join(hostileHome, 'shared-hooks');
+    const marker = join(hostileHome, 'user-hook-executed');
+    const globalConfig = join(hostileHome, 'global.gitconfig');
+    mkdirSync(sharedHooks, { recursive: true });
+    const hostileHook = join(sharedHooks, 'post-commit');
+    writeFileSync(
+      hostileHook,
+      `#!/bin/sh\nprintf invoked > "${marker.replaceAll('\\', '/')}"\n`,
+      'utf8',
+    );
+    chmodSync(hostileHook, 0o755);
+    writeFileSync(
+      globalConfig,
+      `[core]\n\thooksPath = ${sharedHooks.replaceAll('\\', '/')}\n`,
+      'utf8',
+    );
+    const original = {
+      HOME: process.env.HOME,
+      USERPROFILE: process.env.USERPROFILE,
+      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+    };
+
+    try {
+      process.env.HOME = hostileHome;
+      process.env.USERPROFILE = hostileHome;
+      process.env.GIT_CONFIG_GLOBAL = globalConfig;
+      const isolatedRepo = mkdtempSync(join(tmpdir(), 'claude-rca-isolated-setup-'));
+      setupRepo(isolatedRepo);
+      assert.strictEqual(
+        existsSync(marker),
+        false,
+        'repository setup must not execute inherited user hooks',
+      );
+    } finally {
+      for (const [key, value] of Object.entries(original)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('scrubs mixed-case Git command config before the setup commit', () => {
+    const hostileHome = mkdtempSync(join(tmpdir(), 'claude-rca-hostile-command-config-'));
+    const sharedHooks = join(hostileHome, 'shared-hooks');
+    const marker = join(hostileHome, 'command-config-hook-executed');
+    mkdirSync(sharedHooks, { recursive: true });
+    const hostileHook = join(sharedHooks, 'post-commit');
+    writeFileSync(
+      hostileHook,
+      `#!/bin/sh\nprintf invoked > "${marker.replaceAll('\\', '/')}"\n`,
+      'utf8',
+    );
+    chmodSync(hostileHook, 0o755);
+
+    const injectedKeys = ['Git_Config_Count', 'Git_Config_Key_0', 'Git_Config_Value_0'];
+    const injectedKeySet = new Set(injectedKeys.map((key) => key.toUpperCase()));
+    const originalEntries = Object.entries(process.env).filter(([key]) =>
+      injectedKeySet.has(key.toUpperCase()),
+    );
+
+    try {
+      process.env.Git_Config_Count = '1';
+      process.env.Git_Config_Key_0 = 'core.hooksPath';
+      process.env.Git_Config_Value_0 = sharedHooks;
+      const isolatedRepo = mkdtempSync(join(tmpdir(), 'claude-rca-command-config-setup-'));
+      const isolatedEnv = setupRepo(isolatedRepo);
+
+      assert.deepStrictEqual(
+        Object.keys(isolatedEnv).filter((key) => injectedKeySet.has(key.toUpperCase())),
+        [],
+        'repository setup must scrub Git command config without relying on key casing',
+      );
+      assert.strictEqual(
+        existsSync(marker),
+        false,
+        'repository setup must not execute hooks injected through mixed-case Git config',
+      );
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (injectedKeySet.has(key.toUpperCase())) delete process.env[key];
+      }
+      for (const [key, value] of originalEntries) process.env[key] = value;
+    }
   });
 
   it('post-commit hook file exists', () => {
@@ -98,14 +223,13 @@ describe('hooks', () => {
         cwd: tmp,
         encoding: 'utf8',
         env: {
-          ...process.env,
+          ...testGitEnv,
           PATH: minPath + (process.platform === 'win32' ? ';' : ':') + process.env.PATH,
           GIT_TERMINAL_PROMPT: '0',
           GIT_AUTHOR_NAME: 'Test',
           GIT_AUTHOR_EMAIL: 'test@test.com',
           GIT_COMMITTER_NAME: 'Test',
           GIT_COMMITTER_EMAIL: 'test@test.com',
-          HOME: tmp,
         },
         timeout: 10000,
       });
@@ -202,6 +326,7 @@ describe('hooks', () => {
       GIT_CONFIG_GLOBAL: gitconfig,
       GIT_TERMINAL_PROMPT: '0',
     };
+    git(['config', '--local', '--unset', 'core.hooksPath'], tmp, env);
 
     const result = spawnSync(BASH, [INSTALL_HOOK, tmp], { cwd: tmp, encoding: 'utf8', env });
 

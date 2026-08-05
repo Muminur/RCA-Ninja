@@ -905,7 +905,8 @@ export function createProgram() {
         note('config', 'WARN', `no ${PROJECT_CONFIG_NAME} resolved — run '${cliName} init'`);
       }
 
-      // Honour core.hooksPath: `--git-path hooks` returns the effective dir.
+      // Honour only repository-local core.hooksPath. An inherited global or
+      // system path can execute machine-wide hooks and is not local pipeline wiring.
       let hooksDir;
       try {
         hooksDir = execSync('git', ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'], {
@@ -915,9 +916,30 @@ export function createProgram() {
       } catch {
         hooksDir = null;
       }
+      let inheritedHooksPath = false;
+      try {
+        const effectiveHooksPath = execSync('git', ['config', '--get', 'core.hooksPath'], {
+          cwd: doctorCwd,
+          encoding: 'utf8',
+        }).trim();
+        let localHooksPath = '';
+        try {
+          localHooksPath = execSync('git', ['config', '--local', '--get', 'core.hooksPath'], {
+            cwd: doctorCwd,
+            encoding: 'utf8',
+          }).trim();
+        } catch {
+          // No repository-local override.
+        }
+        inheritedHooksPath = effectiveHooksPath !== '' && localHooksPath === '';
+      } catch {
+        // No effective core.hooksPath; Git's repository-local default is safe.
+      }
       let hookHealthy = false;
       if (!hooksDir) {
         note('hook', 'WARN', 'not a git repository');
+      } else if (inheritedHooksPath) {
+        note('hook', 'WARN', 'inherited core.hooksPath is not repository-local');
       } else {
         const hookFile = pathJoin(hooksDir, 'post-commit');
         if (!fsExistsSync(hookFile)) {

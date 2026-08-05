@@ -19,10 +19,13 @@ const ROOT = join(__dirname, '..', '..');
 const BIN = join(ROOT, 'bin', 'claude-rca');
 const POST_COMMIT = join(ROOT, 'hooks', 'post-commit');
 
-function makeIsolatedEnv(prefix) {
+function makeIsolatedEnv(prefix, { globalHooksPath } = {}) {
   const home = mkdtempSync(join(tmpdir(), `${prefix}-home-`));
   const gitconfig = join(home, 'global.gitconfig');
-  writeFileSync(gitconfig, '[user]\n\tname = Test\n\temail = test@example.invalid\n');
+  const hooksConfig = globalHooksPath
+    ? `[core]\n\thooksPath = ${globalHooksPath.replaceAll('\\', '/')}\n`
+    : '';
+  writeFileSync(gitconfig, `${hooksConfig}[user]\n\tname = Test\n\temail = test@example.invalid\n`);
   return {
     ...process.env,
     HOME: home,
@@ -36,11 +39,13 @@ function git(args, cwd, env) {
   return execFileSync('git', args, { cwd, env, encoding: 'utf8' }).trim();
 }
 
-function makeRepo(prefix) {
+function makeRepo(prefix, { globalHooksPath, setLocalHooksPath = true } = {}) {
   const repo = mkdtempSync(join(tmpdir(), prefix));
-  const env = makeIsolatedEnv(prefix);
+  const env = makeIsolatedEnv(prefix, { globalHooksPath });
   git(['init', '-q', '-b', 'main'], repo, env);
-  git(['config', '--local', 'core.hooksPath', join(repo, '.git', 'hooks')], repo, env);
+  if (setLocalHooksPath) {
+    git(['config', '--local', 'core.hooksPath', join(repo, '.git', 'hooks')], repo, env);
+  }
   return { repo, env };
 }
 
@@ -190,5 +195,24 @@ describe('doctor checks the RCA pipeline itself', () => {
 
     const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
     assert.ok(/^hook\s+ok/m.test(stdout), `hook must be found via core.hooksPath, got:\n${stdout}`);
+  });
+
+  it('rejects an RCA hook inherited through global core.hooksPath', () => {
+    const sharedHooks = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-shared-hooks-'));
+    copyFileSync(POST_COMMIT, join(sharedHooks, 'post-commit'));
+    const { repo, env } = makeRepo('claude-rca-doc-inherited-hook-', {
+      globalHooksPath: sharedHooks,
+      setLocalHooksPath: false,
+    });
+    writeFileSync(
+      join(repo, '.claude-rca.json'),
+      JSON.stringify({ version: 1, auto_generate: true }),
+    );
+
+    const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
+
+    assert.match(stdout, /^hook\s+WARN\s+.*inherited core\.hooksPath/im);
+    assert.doesNotMatch(stdout, /^hook\s+ok/m);
+    assert.match(stdout, /^auto-gen\s+FAIL\s+.*local hook/im);
   });
 });
