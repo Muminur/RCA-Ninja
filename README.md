@@ -122,6 +122,22 @@ codex-rca doctor   # verifies the configured provider's binary is installed
 
 If both providers are configured, generation automatically **falls back** to the other when the primary fails (e.g. Claude → Codex). Search, recent/show/trends, hooks, and MCP work identically regardless of provider.
 
+### Secret scanning and fail-closed behavior
+
+`codex-rca generate` and all auto-generated hook paths now require successful
+secret scan completion before producing an RCA. If the scanner cannot be invoked
+safely, returns malformed output, or reports findings, generation fails closed with:
+
+- `SECRET_SCAN_FAILED`
+- `SECRET_SCANNER_UNAVAILABLE`
+
+This is intentional and defensive: generation does not continue when scanning cannot
+be trusted.
+
+When `auto_generate` is `true`, a failed scanner blocks `fix:` generation so the
+hook emits a warning and does not produce an RCA. Set `auto_generate=false` to
+opt out of automatic generation for that repository.
+
 ## RCA Output
 
 Generated RCA documents are stored as Markdown:

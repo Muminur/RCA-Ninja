@@ -44,7 +44,6 @@ function walkMdFiles(dir) {
  *   config: Object,
  *   systemPromptPath: string,
  *   schemaPath: string,
- *   _generateFn?: Function,
  *   _buildContextFn?: Function,
  *   _rebuildManifestFn?: Function,
  * }} options
@@ -58,7 +57,6 @@ export async function amendRca({
   config,
   systemPromptPath,
   schemaPath,
-  _generateFn = generate,
   _buildContextFn = buildContext,
   _rebuildManifestFn = rebuildManifest,
   _readPriorRcasFn = readPriorRcas,
@@ -84,7 +82,7 @@ export async function amendRca({
   const priorRcas = _readPriorRcasFn({ outputDir, filesChanged: context.files_changed });
 
   // Generate the updated RCA (passing correctionHint and prior context through)
-  const { rca } = await _generateFn({
+  const { rca } = await generate({
     context,
     config,
     systemPromptPath,

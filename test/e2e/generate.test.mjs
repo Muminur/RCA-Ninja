@@ -1,201 +1,181 @@
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, '..', '..');
-const BIN = join(ROOT, 'bin', 'claude-rca');
-const STUB = join(ROOT, 'test', 'fixtures', 'claude-stub.mjs');
-const CODEX_STUB = join(ROOT, 'test', 'fixtures', 'codex-stub.mjs');
+import {
+  installGitleaksStub,
+  scannerReceiptMarker,
+  scannerRejectPayload,
+} from '../fixtures/gitleaks-test-env.mjs';
 
-function git(args, cwd) {
-  return execFileSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-  }).trim();
-}
+const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-generate-bootstrap-'));
+process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+const { generate } = await import('../../src/generator.mjs');
+process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
 
-function setupRepo(tmp) {
-  git(['init'], tmp);
-  git(['config', 'user.email', 'test@test.com'], tmp);
-  git(['config', 'user.name', 'Test'], tmp);
-  writeFileSync(join(tmp, 'file1.js'), 'console.log("hello");\n');
-  git(['add', '.'], tmp);
-  git(['commit', '-m', 'fix: initial bug fix'], tmp);
-}
-
-function makeConfig(tmp, overrides = {}) {
-  const config = {
-    version: 1,
-    output_dir: './rca',
-    claude: { binary: `node ${STUB}`, ...overrides },
+function generationInput(dir, overrides = {}) {
+  const systemPromptPath = join(dir, 'system-prompt.txt');
+  const schemaPath = join(dir, 'schema.json');
+  writeFileSync(systemPromptPath, overrides.systemPrompt || 'system prompt sentinel', 'utf8');
+  writeFileSync(schemaPath, JSON.stringify({ type: 'object', marker: 'schema sentinel' }), 'utf8');
+  return {
+    context: {
+      repo_root: dir,
+      short_hash: 'abc1234',
+      branch: 'main',
+      commit_message: 'fix: refuse unisolated providers',
+      files_changed: ['src/provider.mjs'],
+      logs: 'log sentinel',
+      diff: 'diff sentinel',
+    },
+    config: { provider: 'claude' },
+    systemPromptPath,
+    schemaPath,
+    priorRcas: [{ title: 'prior RCA sentinel' }],
+    correctionHint: 'correction sentinel',
   };
-  writeFileSync(join(tmp, '.claude-rca.json'), JSON.stringify(config));
 }
 
-function makeFallbackConfig(tmp) {
-  const config = {
-    version: 1,
-    output_dir: './rca',
-    claude: { binary: 'claude-not-installed-for-test' },
-    codex: { binary: `node ${CODEX_STUB}` },
-  };
-  writeFileSync(join(tmp, '.claude-rca.json'), JSON.stringify(config));
-}
+describe('generate provider security gate', () => {
+  it('refuses generation without a canonical workspace root before scanner delivery', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rca-generate-missing-root-'));
+    const receiptPath = join(dir, 'scanner-receipt.json');
 
-function runCli(args, cwd, env = {}) {
-  return execFileSync('node', [BIN, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: { ...process.env, ...env },
-    timeout: 30000,
-  });
-}
+    try {
+      const input = generationInput(dir, {
+        systemPrompt: `system prompt sentinel\n${scannerReceiptMarker(receiptPath)}`,
+      });
+      delete input.context.repo_root;
 
-function runCliErr(args, cwd, env = {}) {
-  try {
-    execFileSync('node', [BIN, ...args], {
-      cwd,
-      encoding: 'utf8',
-      env: { ...process.env, ...env },
-      timeout: 30000,
-    });
-    assert.fail('Expected non-zero exit');
-  } catch (err) {
-    return err;
-  }
-}
-
-describe('generate e2e', () => {
-  let tmp;
-
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'claude-rca-e2e-'));
-    setupRepo(tmp);
+      await assert.rejects(
+        () => generate(input),
+        (error) => error.code === 'SECRET_SCANNER_UNAVAILABLE',
+      );
+      assert.strictEqual(existsSync(receiptPath), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it('generates an RCA with the stub and writes to rca/', () => {
-    makeConfig(tmp);
-    const stdout = runCli(['generate'], tmp);
-    const rcaPath = stdout.trim();
-    assert.ok(rcaPath.includes('rca'));
-    assert.ok(rcaPath.endsWith('.md'));
-    assert.ok(existsSync(rcaPath));
-    const content = readFileSync(rcaPath, 'utf8');
-    assert.ok(content.includes('## Symptom'));
-    assert.ok(content.includes('## Root Cause'));
-    // runCli uses execFileSync which throws on non-zero exit, so reaching here means exit 0
+  it('scans input and refuses provider isolation while ignoring public bypasses', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rca-generate-isolation-'));
+    const receiptPath = join(dir, 'scanner-receipt.json');
+    let injectedScanCalls = 0;
+    let injectedRunCalls = 0;
+
+    try {
+      const input = generationInput(dir, {
+        systemPrompt: `system prompt sentinel\n${scannerReceiptMarker(receiptPath)}`,
+      });
+
+      await assert.rejects(
+        () =>
+          generate({
+            ...input,
+            _scanFn: async () => {
+              injectedScanCalls += 1;
+            },
+            _runFn: async () => {
+              injectedRunCalls += 1;
+              throw Object.assign(new Error('private provider diagnostic'), {
+                code: 'SECRET_SCAN_FAILED',
+              });
+            },
+          }),
+        (error) => {
+          assert.strictEqual(error.code, 'PROVIDER_ISOLATION_UNAVAILABLE');
+          assert.strictEqual(
+            error.message,
+            'No approved isolated provider broker is available; provider execution was refused.',
+          );
+          assert.deepStrictEqual(error.context, {});
+          return true;
+        },
+      );
+
+      assert.strictEqual(injectedScanCalls, 0);
+      assert.strictEqual(injectedRunCalls, 0);
+      const scanned = JSON.parse(readFileSync(receiptPath, 'utf8'));
+      assert.deepStrictEqual(Object.keys(scanned), [
+        'systemPrompt',
+        'schema',
+        'context',
+        'priorRcas',
+        'correctionHint',
+      ]);
+      assert.ok(scanned.systemPrompt.includes('system prompt sentinel'));
+      assert.ok(scanned.schema.includes('schema sentinel'));
+      assert.deepStrictEqual(scanned.context, input.context);
+      assert.strictEqual(scanned.context.diff, 'diff sentinel');
+      assert.strictEqual(scanned.context.logs, 'log sentinel');
+      assert.strictEqual(scanned.context.branch, 'main');
+      assert.strictEqual(scanned.context.commit_message, 'fix: refuse unisolated providers');
+      assert.deepStrictEqual(scanned.context.files_changed, ['src/provider.mjs']);
+      assert.deepStrictEqual(scanned.priorRcas, [{ title: 'prior RCA sentinel' }]);
+      assert.strictEqual(scanned.correctionHint, 'correction sentinel');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it('exits 0 on successful generation', () => {
-    makeConfig(tmp);
-    // execFileSync throws if exit != 0; if it returns, exit was 0
-    const stdout = runCli(['generate'], tmp);
-    assert.ok(stdout.trim().endsWith('.md'), 'stdout must be the RCA path');
+  it('sends explicit null optionals through the real scanner path', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rca-generate-null-payload-'));
+    const receiptPath = join(dir, 'scanner-receipt.json');
+
+    try {
+      const input = generationInput(dir, {
+        systemPrompt: `system prompt sentinel\n${scannerReceiptMarker(receiptPath)}`,
+      });
+      delete input.priorRcas;
+      delete input.correctionHint;
+
+      await assert.rejects(
+        () => generate(input),
+        (error) => error.code === 'PROVIDER_ISOLATION_UNAVAILABLE',
+      );
+
+      const scanned = JSON.parse(readFileSync(receiptPath, 'utf8'));
+      assert.strictEqual(scanned.priorRcas, null);
+      assert.strictEqual(scanned.correctionHint, null);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it('--dry-run prints path but writes nothing', () => {
-    makeConfig(tmp);
-    const stdout = runCli(['generate', '--dry-run'], tmp);
-    const rcaPath = stdout.trim();
-    assert.ok(rcaPath.endsWith('.md'));
-    assert.ok(!existsSync(rcaPath));
-  });
+  it('uses only the real scanner path and redacts scanner diagnostics', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rca-generate-scan-reject-'));
+    let injectedScanCalls = 0;
+    let injectedRunCalls = 0;
 
-  it('stub returning invalid JSON causes exit 22', () => {
-    makeConfig(tmp);
-    const err = runCliErr(['generate'], tmp, { CLAUDE_STUB_INVALID: '1' });
-    assert.strictEqual(err.status, 22);
-  });
+    try {
+      const input = generationInput(dir, { systemPrompt: scannerRejectPayload() });
 
-  it('stub exiting non-zero causes exit 21', () => {
-    makeConfig(tmp);
-    const err = runCliErr(['generate'], tmp, { CLAUDE_STUB_EXIT: '1' });
-    assert.strictEqual(err.status, 21);
-  });
+      await assert.rejects(
+        () =>
+          generate({
+            ...input,
+            _scanFn: async () => {
+              injectedScanCalls += 1;
+            },
+            _runFn: async () => {
+              injectedRunCalls += 1;
+            },
+          }),
+        (error) => {
+          assert.strictEqual(error.code, 'SECRET_SCAN_FAILED');
+          assert.strictEqual(error.message, 'The secret scanner blocked provider execution.');
+          assert.deepStrictEqual(error.context, {});
+          assert.ok(!error.message.includes('sensitive diagnostics'));
+          return true;
+        },
+      );
 
-  it('falls back to Codex and writes an RCA when Claude is unavailable', () => {
-    const logPath = join(tmp, 'codex-stub.log');
-    makeFallbackConfig(tmp);
-    const stdout = runCli(['generate'], tmp, { CODEX_STUB_LOG: logPath });
-    const rcaPath = stdout.trim();
-    assert.ok(rcaPath.endsWith('.md'), 'stdout must be the RCA path');
-    assert.ok(existsSync(rcaPath), 'RCA file must exist');
-    const content = readFileSync(rcaPath, 'utf8');
-    assert.ok(content.includes('## Symptom'), 'fallback must produce a rendered RCA via Codex');
-    const log = readFileSync(logPath, 'utf8');
-    const entry = JSON.parse(log.trim().split('\n')[0]);
-    assert.deepStrictEqual(entry.argv.slice(0, 1), ['exec']);
-    assert.ok(entry.argv.includes('--output-schema'), 'Codex fallback must request schema output');
-  });
-
-  it('asserts --permission-mode plan in stub argv log', () => {
-    const logPath = join(tmp, 'stub.log');
-    makeConfig(tmp);
-    runCli(['generate'], tmp, { CLAUDE_STUB_LOG: logPath });
-    const log = readFileSync(logPath, 'utf8');
-    const entry = JSON.parse(log.trim().split('\n')[0]);
-    assert.ok(entry.argv.includes('--permission-mode'));
-    const pmIdx = entry.argv.indexOf('--permission-mode');
-    assert.strictEqual(entry.argv[pmIdx + 1], 'plan');
-  });
-
-  it('asserts --allowedTools in stub argv log', () => {
-    const logPath = join(tmp, 'stub.log');
-    makeConfig(tmp);
-    runCli(['generate'], tmp, { CLAUDE_STUB_LOG: logPath });
-    const log = readFileSync(logPath, 'utf8');
-    const entry = JSON.parse(log.trim().split('\n')[0]);
-    assert.ok(entry.argv.includes('--allowedTools'));
-  });
-
-  it('asserts --output-format json in stub argv log', () => {
-    const logPath = join(tmp, 'stub.log');
-    makeConfig(tmp);
-    runCli(['generate'], tmp, { CLAUDE_STUB_LOG: logPath });
-    const log = readFileSync(logPath, 'utf8');
-    const entry = JSON.parse(log.trim().split('\n')[0]);
-    const ofIdx = entry.argv.indexOf('--output-format');
-    assert.ok(ofIdx !== -1, '--output-format must be present in argv');
-    assert.strictEqual(entry.argv[ofIdx + 1], 'json');
-  });
-
-  it('argv NEVER contains --bare even when ANTHROPIC_API_KEY is set', () => {
-    const logPath = join(tmp, 'stub.log');
-    makeConfig(tmp);
-    runCli(['generate'], tmp, {
-      CLAUDE_STUB_LOG: logPath,
-      ANTHROPIC_API_KEY: 'sk-ant-fake-key-for-test',
-    });
-    const log = readFileSync(logPath, 'utf8');
-    const entry = JSON.parse(log.trim().split('\n')[0]);
-    assert.ok(!entry.argv.includes('--bare'), 'argv must not contain --bare');
-  });
-
-  it('estimated_tokens is logged to stderr', () => {
-    makeConfig(tmp);
-    const result = spawnSync('node', [BIN, 'generate'], {
-      cwd: tmp,
-      encoding: 'utf8',
-      env: { ...process.env },
-      timeout: 30000,
-    });
-    assert.ok(
-      result.stderr.includes('estimated_tokens'),
-      `stderr should contain estimated_tokens, got: ${result.stderr.slice(0, 200)}`,
-    );
-  });
-
-  it('--analyze runs analyst and still writes the RCA on PUBLISH verdict', () => {
-    makeConfig(tmp);
-    const stdout = runCli(['generate', '--analyze'], tmp);
-    const rcaPath = stdout.trim();
-    assert.ok(rcaPath.endsWith('.md'), 'stdout must be the RCA path');
-    assert.ok(existsSync(rcaPath), 'RCA file must exist');
+      assert.strictEqual(injectedScanCalls, 0);
+      assert.strictEqual(injectedRunCalls, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

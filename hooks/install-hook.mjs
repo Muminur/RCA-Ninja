@@ -1,34 +1,230 @@
 #!/usr/bin/env node
-// Cross-platform git hook installer for claude-rca.
-// Replaces install-hook.sh — works on Windows (PowerShell, cmd) and Unix.
-// Idempotent: re-running updates existing claude-rca hooks, chains with others.
-import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
-import { execSync, execFileSync } from 'node:child_process';
-import { homedir } from 'node:os';
+// Cross-platform, repository-local git hook installer for claude-rca.
+// Idempotent: re-running updates existing claude-rca hooks and chains with others.
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  chmodSync,
+  lstatSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs';
+import { join, dirname, resolve, relative, isAbsolute, basename } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const SRC_DIR = dirname(__filename);
-const REPO_DIR = resolve(SRC_DIR, '..');
 const HOOKS = ['post-commit', 'commit-msg'];
-const MARKER = 'claude-rca';
+
+function unsafeGitEnvironmentVariable() {
+  return Object.keys(process.env).find((name) => {
+    const normalized = name.toUpperCase();
+    return (
+      normalized.startsWith('GIT_CONFIG') ||
+      normalized === 'GIT_DIR' ||
+      normalized === 'GIT_WORK_TREE' ||
+      normalized === 'GIT_COMMON_DIR' ||
+      normalized === 'GIT_ATTR_NOSYSTEM'
+    );
+  });
+}
 
 function getHookDir(cwd) {
   try {
-    return execSync('git rev-parse --git-path hooks', {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
+    const hookDir = execFileSync(
+      'git',
+      ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-path', 'hooks'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    ).trim();
+    return hookDir ? resolve(cwd, hookDir) : null;
   } catch {
     return null;
   }
 }
 
-function installOne(name, hookDir) {
+function gitConfig(cwd, scopeArgs) {
+  try {
+    return execFileSync(
+      'git',
+      ['-C', cwd, 'config', ...scopeArgs, '--show-origin', '--get', 'core.hooksPath'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    ).trim();
+  } catch {
+    return '';
+  }
+}
+
+function hasNonLocalHooksPath(cwd) {
+  const effective = gitConfig(cwd, []);
+  const local = gitConfig(cwd, ['--local']);
+  return effective !== '' && effective !== local;
+}
+
+function canonicalizePath(path) {
+  let existing = resolve(path);
+  const missing = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) return null;
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
+  return resolve(realpathSync(existing), ...missing);
+}
+
+function gitPath(cwd, args) {
+  try {
+    return execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', ...args], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function isWithin(path, root) {
+  const child = relative(root, path);
+  return (
+    child === '' ||
+    (!child.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) &&
+      child !== '..' &&
+      !isAbsolute(child))
+  );
+}
+
+function hookDirIsRepositoryLocal(cwd, hookDir) {
+  const canonicalHookDir = canonicalizePath(hookDir);
+  if (!canonicalHookDir) return false;
+  const roots = [
+    gitPath(cwd, ['--show-toplevel']),
+    gitPath(cwd, ['--absolute-git-dir']),
+    gitPath(cwd, ['--git-common-dir']),
+  ];
+  return roots.some((root) => {
+    const canonicalRoot = root ? canonicalizePath(root) : null;
+    return canonicalRoot ? isWithin(canonicalHookDir, canonicalRoot) : false;
+  });
+}
+
+function getHookDirectoryAnchor(hookDir) {
+  try {
+    const linkStat = lstatSync(hookDir);
+    if (linkStat.isSymbolicLink() || !linkStat.isDirectory()) return null;
+    const canonicalPath = realpathSync(hookDir);
+    const identity = statSync(canonicalPath, { bigint: true });
+    return { canonicalPath, dev: identity.dev, ino: identity.ino };
+  } catch {
+    return null;
+  }
+}
+
+function pathMatchesAnchor(path, anchor) {
+  try {
+    const identity = statSync(path, { bigint: true });
+    return identity.isDirectory() && identity.dev === anchor.dev && identity.ino === anchor.ino;
+  } catch {
+    return false;
+  }
+}
+
+function originalHookDirectoryMatchesAnchor(originalHookDir, anchor) {
+  try {
+    const linkStat = lstatSync(originalHookDir);
+    return (
+      linkStat.isDirectory() &&
+      !linkStat.isSymbolicLink() &&
+      realpathSync(originalHookDir) === anchor.canonicalPath &&
+      pathMatchesAnchor(originalHookDir, anchor)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hookDirectoryStillAnchored(cwd, originalHookDir, anchor) {
+  return (
+    pathMatchesAnchor('.', anchor) &&
+    originalHookDirectoryMatchesAnchor(originalHookDir, anchor) &&
+    hookDirIsRepositoryLocal(cwd, anchor.canonicalPath)
+  );
+}
+
+function quoteShellSingle(value) {
+  return `'${String(value).replaceAll(`'`, `'\\''`)}'`;
+}
+
+function unsafeHookDestination(name, hookDir) {
+  const dest = join(hookDir, name);
+  try {
+    const stat = lstatSync(dest);
+    return stat.isSymbolicLink() || !stat.isFile() || stat.nlink > 1n ? dest : null;
+  } catch (error) {
+    return error?.code === 'ENOENT' ? null : dest;
+  }
+}
+
+function replaceHook(name, hookDir, content, cwd, originalHookDir, anchor) {
+  const dest = join(hookDir, name);
+  const temp = join(hookDir, `.codex-rca-${name}-${process.pid}-${randomUUID()}.tmp`);
+  try {
+    if (!hookDirectoryStillAnchored(cwd, originalHookDir, anchor)) {
+      console.error(`Hook directory changed during installation: ${originalHookDir}`);
+      return false;
+    }
+    writeFileSync(temp, content, { flag: 'wx', mode: 0o755 });
+    try {
+      chmodSync(temp, 0o755);
+    } catch {
+      // chmod may fail on Windows; the safely created temp file is still publishable.
+    }
+
+    if (unsafeHookDestination(name, hookDir)) {
+      console.error(`Refusing symbolic or multiply-linked hook destination: ${dest}`);
+      return false;
+    }
+    if (!hookDirectoryStillAnchored(cwd, originalHookDir, anchor)) {
+      console.error(`Hook directory changed during installation: ${originalHookDir}`);
+      return false;
+    }
+
+    renameSync(temp, dest);
+    if (!hookDirectoryStillAnchored(cwd, originalHookDir, anchor)) {
+      console.error(`Hook directory changed during installation: ${originalHookDir}`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.error(`Failed to replace hook at ${dest}: ${error?.message || String(error)}`);
+    return false;
+  } finally {
+    try {
+      unlinkSync(temp);
+    } catch {
+      // The successful rename consumed the temp path; failed attempts are cleaned up.
+    }
+  }
+}
+
+function installOne(name, hookDir, cwd, originalHookDir, anchor) {
   const src = join(SRC_DIR, name);
   const dest = join(hookDir, name);
+
+  if (unsafeHookDestination(name, hookDir)) {
+    console.error(`Refusing symbolic or multiply-linked hook destination: ${dest}`);
+    return false;
+  }
 
   if (!existsSync(src)) {
     console.log(`skip: ${name} source missing at ${src}`);
@@ -40,18 +236,34 @@ function installOne(name, hookDir) {
   if (existsSync(dest)) {
     const existing = readFileSync(dest, 'utf8');
 
-    if (existing.includes(MARKER)) {
-      writeFileSync(dest, srcContent, { mode: 0o755 });
+    if (existing.split(/\r?\n/).includes(`# codex-rca-managed-hook: ${name}`)) {
+      if (!replaceHook(name, hookDir, srcContent, cwd, originalHookDir, anchor)) return false;
       console.log(`✓ updated claude-rca ${name} hook at ${dest}`);
       return true;
     }
 
-    // Existing non-claude-rca hook — chain instead of refusing
+    const quotedSrc = quoteShellSingle(src);
     const chainLine =
-      process.platform === 'win32' ? `\nbash "${src}" "$@" || true\n` : `\n"${src}" "$@" || true\n`;
+      process.platform === 'win32'
+        ? `\nbash ${quotedSrc} "$@" || true\n`
+        : `\n${quotedSrc} "$@" || true\n`;
+    const chainLineCandidates = [
+      process.platform === 'win32' ? `\nbash "${src}" "$@" || true\n` : `\n"${src}" "$@" || true\n`,
+      chainLine,
+    ];
 
-    if (!existing.includes(src)) {
-      writeFileSync(dest, existing.trimEnd() + '\n' + chainLine, { mode: 0o755 });
+    if (!chainLineCandidates.some((candidate) => existing.includes(candidate))) {
+      if (
+        !replaceHook(
+          name,
+          hookDir,
+          existing.trimEnd() + '\n' + chainLine,
+          cwd,
+          originalHookDir,
+          anchor,
+        )
+      )
+        return false;
       console.log(`✓ chained claude-rca ${name} into existing hook at ${dest}`);
     } else {
       console.log(`✓ claude-rca ${name} already chained in ${dest}`);
@@ -59,103 +271,89 @@ function installOne(name, hookDir) {
     return true;
   }
 
-  // No existing hook — install fresh
-  writeFileSync(dest, srcContent, { mode: 0o755 });
-  try {
-    chmodSync(dest, 0o755);
-  } catch {
-    // chmod may fail on Windows — the file is still created
-  }
+  if (!replaceHook(name, hookDir, srcContent, cwd, originalHookDir, anchor)) return false;
   console.log(`✓ installed claude-rca ${name} hook at ${dest}`);
   return true;
 }
 
-function ensureOnPath() {
-  try {
-    execSync(process.platform === 'win32' ? 'where.exe claude-rca' : 'which claude-rca', {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    return;
-  } catch {
-    // not on PATH
-  }
-
-  console.log('claude-rca not on PATH — attempting npm link...');
-  try {
-    execSync('npm link', {
-      cwd: REPO_DIR,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 30000,
-    });
-    console.log('✓ npm link succeeded — claude-rca is now globally accessible');
-  } catch {
-    console.log(`⚠ npm link failed. Run manually: cd ${REPO_DIR} && npm link`);
-  }
-}
-
-/**
- * Install the machine-wide fallback.
- *
- * `.git/hooks` is not version-controlled, so a fresh clone has no post-commit
- * hook and says nothing about it — a fix: commit just silently produces no RCA.
- * A global core.hooksPath closes that gap for every repo without a local
- * override. Only post-commit goes here: a global commit-msg would enforce
- * Conventional Commits in every repository on the machine.
- */
-function installGlobal() {
-  let hookDir = null;
-  try {
-    hookDir = execFileSync('git', ['config', '--global', '--get', 'core.hooksPath'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-  } catch {
-    hookDir = null;
-  }
-
-  if (!hookDir) {
-    hookDir = join(homedir(), '.git-hooks');
-    try {
-      execFileSync('git', ['config', '--global', 'core.hooksPath', hookDir], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      console.log(`✓ set global core.hooksPath to ${hookDir}`);
-    } catch {
-      console.error(
-        `⚠ could not set global core.hooksPath — run: git config --global core.hooksPath ${hookDir}`,
-      );
-      return false;
-    }
-  }
-
-  mkdirSync(hookDir, { recursive: true });
-  const ok = installOne('post-commit', hookDir);
-  console.log(`  (global fallback only — commit-msg is intentionally per-repo)`);
-  return ok;
-}
-
-// --- Main ---
 const args = process.argv.slice(2);
-const globalMode = args.includes('--global');
-
-if (globalMode) {
-  process.exit(installGlobal() ? 0 : 1);
+if (args.includes('--global')) {
+  console.error(
+    'Global hook installation is not supported; use an explicit local repository path.',
+  );
+  process.exit(1);
 }
 
-const cwd = args[0] || process.cwd();
+if (args.length !== 1 || args[0].startsWith('-')) {
+  console.error('Hook installation requires one explicit repository path.');
+  process.exit(1);
+}
+
+const cwd = resolve(args[0]);
+const unsafeEnvironment = unsafeGitEnvironmentVariable();
+if (unsafeEnvironment) {
+  console.error(`Refusing unsafe Git environment variable: ${unsafeEnvironment}`);
+  process.exit(1);
+}
+
 const hookDir = getHookDir(cwd);
 
 if (!hookDir) {
-  console.error('⚠ Not a git repository — skipping hook installation');
-  process.exit(0);
+  console.error(`Not a git repository: ${cwd}`);
+  process.exit(1);
 }
 
-mkdirSync(hookDir, { recursive: true });
+if (hasNonLocalHooksPath(cwd)) {
+  console.error(
+    'Refusing inherited core.hooksPath or effective override that is not repository-local.',
+  );
+  process.exit(1);
+}
+
+const hookDirectoryAnchor = getHookDirectoryAnchor(hookDir);
+if (!hookDirectoryAnchor) {
+  console.error(`Refusing missing, symbolic, or non-directory hooks path: ${hookDir}`);
+  process.exit(1);
+}
+
+if (!hookDirIsRepositoryLocal(cwd, hookDirectoryAnchor.canonicalPath)) {
+  console.error('Refusing core.hooksPath outside the repository worktree or Git directory.');
+  process.exit(1);
+}
+
+if (!originalHookDirectoryMatchesAnchor(hookDir, hookDirectoryAnchor)) {
+  console.error(`Hook directory changed during validation: ${hookDir}`);
+  process.exit(1);
+}
+
+try {
+  process.chdir(hookDirectoryAnchor.canonicalPath);
+} catch {
+  console.error(`Cannot anchor hooks directory: ${hookDir}`);
+  process.exit(1);
+}
+if (!hookDirectoryStillAnchored(cwd, hookDir, hookDirectoryAnchor)) {
+  console.error(`Hook directory changed during validation: ${hookDir}`);
+  process.exit(1);
+}
+
+const anchoredHookDir = '.';
+const unsafeDestination = HOOKS.map((name) => unsafeHookDestination(name, anchoredHookDir)).find(
+  Boolean,
+);
+if (unsafeDestination) {
+  console.error(
+    `Refusing symbolic or multiply-linked hook destination: ${join(hookDir, basename(unsafeDestination))}`,
+  );
+  process.exit(1);
+}
 
 let ok = true;
 for (const name of HOOKS) {
-  if (!installOne(name, hookDir)) ok = false;
+  if (!installOne(name, anchoredHookDir, cwd, hookDir, hookDirectoryAnchor)) {
+    ok = false;
+    break;
+  }
 }
 
-ensureOnPath();
 process.exit(ok ? 0 : 1);

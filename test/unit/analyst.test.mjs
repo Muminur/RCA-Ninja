@@ -1,162 +1,116 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runAnalyst } from '../../src/analyst.mjs';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, '..', '..');
+import {
+  installGitleaksStub,
+  scannerReceiptMarker,
+  scannerRejectPayload,
+} from '../fixtures/gitleaks-test-env.mjs';
 
-function makeFakeRcaFile(dir) {
-  const path = join(dir, 'RCA-2026-01-01-abc1234-test.md');
-  writeFileSync(
-    path,
-    `---
-title: "Test RCA"
-date: 2026-01-01
-confidence: medium
-tags: [rca, bugfix]
-ref: abc1234
----
+const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-analyst-bootstrap-'));
+process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+const { runAnalyst } = await import('../../src/analyst.mjs');
+process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
 
-## Symptom
-Something broke.
+describe('runAnalyst provider security gate', () => {
+  it('normalizes a relative workspace root before scanner delivery', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rca-analyst-relative-cwd-'));
+    const writtenPath = join(dir, 'RCA-private-name.md');
+    const promptPath = join(dir, 'analyst-prompt.md');
+    const receiptPath = join(dir, 'scanner-receipt.json');
+    writeFileSync(promptPath, `Safe analyst prompt\n${scannerReceiptMarker(receiptPath)}`, 'utf8');
+    writeFileSync(writtenPath, 'RCA document sentinel', 'utf8');
 
-## Root Cause
-Null pointer in middleware/auth.js:47.
-
-## Fix
-Added null guard before property access.
-
-## Impact
-Login requests failing.
-`,
-  );
-  return path;
-}
-
-describe('runAnalyst', () => {
-  it('returns an object with verdict and findings properties', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-'));
     try {
-      const rcaPath = makeFakeRcaFile(dir);
-      const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
-      const result = await runAnalyst({
-        writtenPath: rcaPath,
-        systemPromptPath,
-        config: {},
-        _spawnFn: async () => ({
-          stdout: JSON.stringify({
-            structured_output: {
-              verdict: 'PUBLISH',
-              findings: 'Root cause is specific. Fix is verifiable.',
-            },
-          }),
-        }),
-      });
-      assert.ok(typeof result.verdict === 'string', 'verdict must be a string');
-      assert.ok(
-        ['PUBLISH', 'REVISE', 'REJECT'].includes(result.verdict),
-        'verdict must be PUBLISH/REVISE/REJECT',
-      );
-      assert.ok(typeof result.findings === 'string', 'findings must be a string');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('returns PUBLISH verdict from injected spawn', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-publish-'));
-    try {
-      const rcaPath = makeFakeRcaFile(dir);
-      const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
-      const result = await runAnalyst({
-        writtenPath: rcaPath,
-        systemPromptPath,
-        config: {},
-        _spawnFn: async () => ({
-          stdout: JSON.stringify({
-            structured_output: { verdict: 'PUBLISH', findings: 'All criteria met.' },
-          }),
-        }),
-      });
-      assert.strictEqual(result.verdict, 'PUBLISH');
-      assert.strictEqual(result.findings, 'All criteria met.');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('returns REVISE verdict from injected spawn', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-revise-'));
-    try {
-      const rcaPath = makeFakeRcaFile(dir);
-      const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
-      const result = await runAnalyst({
-        writtenPath: rcaPath,
-        systemPromptPath,
-        config: {},
-        _spawnFn: async () => ({
-          stdout: JSON.stringify({
-            structured_output: { verdict: 'REVISE', findings: 'Root cause is too vague.' },
-          }),
-        }),
-      });
-      assert.strictEqual(result.verdict, 'REVISE');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('asserts --allowedTools Read is in the spawn argv (§2.8 hard rule)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-argv-'));
-    try {
-      const rcaPath = makeFakeRcaFile(dir);
-      const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
-      let capturedArgv;
-      await runAnalyst({
-        writtenPath: rcaPath,
-        systemPromptPath,
-        config: {},
-        _spawnFn: async (_cmd, argv) => {
-          capturedArgv = argv;
-          return {
-            stdout: JSON.stringify({ structured_output: { verdict: 'PUBLISH', findings: 'ok' } }),
-          };
-        },
-      });
-      assert.ok(capturedArgv, 'spawn must have been called');
-      const toolsIdx = capturedArgv.indexOf('--allowedTools');
-      assert.ok(toolsIdx !== -1, '--allowedTools must be present in argv');
-      assert.strictEqual(
-        capturedArgv[toolsIdx + 1],
-        'Read',
-        '--allowedTools value must be Read only',
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('throws SCHEMA_VALIDATION when analyst output is not valid JSON', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-json-'));
-    try {
-      const rcaPath = makeFakeRcaFile(dir);
-      const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
-      const { RcaError } = await import('../../src/errors.mjs');
       await assert.rejects(
         () =>
           runAnalyst({
-            writtenPath: rcaPath,
-            systemPromptPath,
+            writtenPath,
+            systemPromptPath: promptPath,
             config: {},
-            _spawnFn: async () => ({ stdout: 'not-valid-json-at-all' }),
+            cwd: relative(process.cwd(), dir),
           }),
-        (err) => {
-          assert.ok(err instanceof RcaError);
-          assert.strictEqual(err.code, 'SCHEMA_VALIDATION');
+        (error) => error.code === 'PROVIDER_ISOLATION_UNAVAILABLE',
+      );
+      assert.ok(readFileSync(receiptPath, 'utf8').includes('Safe analyst prompt'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('scans file contents and refuses isolation while ignoring public bypasses', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rca-analyst-isolation-'));
+    const writtenPath = join(dir, 'RCA-private-name.md');
+    const promptPath = join(dir, 'analyst-prompt.md');
+    const receiptPath = join(dir, 'scanner-receipt.json');
+    let injectedScanCalls = 0;
+    let injectedSpawnCalls = 0;
+    writeFileSync(
+      promptPath,
+      `---\nname: analyst\n---\nAnalyst prompt sentinel\n${scannerReceiptMarker(receiptPath)}`,
+      'utf8',
+    );
+    writeFileSync(writtenPath, 'RCA document sentinel', 'utf8');
+
+    try {
+      await assert.rejects(
+        () =>
+          runAnalyst({
+            writtenPath,
+            systemPromptPath: promptPath,
+            config: { provider: 'claude' },
+            _scanFn: async () => {
+              injectedScanCalls += 1;
+            },
+            _spawnFn: async () => {
+              injectedSpawnCalls += 1;
+              throw Object.assign(new Error('private provider diagnostic'), {
+                code: 'SECRET_SCANNER_UNAVAILABLE',
+              });
+            },
+          }),
+        (error) => {
+          assert.strictEqual(error.code, 'PROVIDER_ISOLATION_UNAVAILABLE');
+          assert.strictEqual(
+            error.message,
+            'No approved isolated provider broker is available; provider execution was refused.',
+          );
+          assert.deepStrictEqual(error.context, {});
+          return true;
+        },
+      );
+
+      assert.strictEqual(injectedScanCalls, 0);
+      assert.strictEqual(injectedSpawnCalls, 0);
+      const scanned = JSON.parse(readFileSync(receiptPath, 'utf8'));
+      assert.deepStrictEqual(Object.keys(scanned), ['systemPrompt', 'documentContent']);
+      assert.ok(scanned.systemPrompt.includes('Analyst prompt sentinel'));
+      assert.ok(!scanned.systemPrompt.includes('name: analyst'));
+      assert.strictEqual(scanned.documentContent, 'RCA document sentinel');
+      assert.ok(!JSON.stringify(scanned).includes(writtenPath));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('scans the analyst document through the real scanner and redacts diagnostics', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rca-analyst-scan-reject-'));
+    const writtenPath = join(dir, 'RCA-private-name.md');
+    const promptPath = join(dir, 'analyst-prompt.md');
+    writeFileSync(promptPath, 'Safe analyst prompt', 'utf8');
+    writeFileSync(writtenPath, scannerRejectPayload(), 'utf8');
+
+    try {
+      await assert.rejects(
+        () => runAnalyst({ writtenPath, systemPromptPath: promptPath, config: {} }),
+        (error) => {
+          assert.strictEqual(error.code, 'SECRET_SCAN_FAILED');
+          assert.strictEqual(error.message, 'The secret scanner blocked provider execution.');
+          assert.deepStrictEqual(error.context, {});
+          assert.ok(!error.message.includes('sensitive diagnostics'));
           return true;
         },
       );
@@ -165,23 +119,29 @@ describe('runAnalyst', () => {
     }
   });
 
-  it('throws RcaError on spawn failure', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-analyst-fail-'));
+  it('returns a static disk error without scanning when complete input cannot be read', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rca-analyst-read-'));
     try {
-      const rcaPath = makeFakeRcaFile(dir);
-      const systemPromptPath = join(ROOT, '.claude', 'agents', 'rca-analyst.md');
-      const { RcaError } = await import('../../src/errors.mjs');
       await assert.rejects(
         () =>
           runAnalyst({
-            writtenPath: rcaPath,
-            systemPromptPath,
+            writtenPath: join(dir, 'private-missing-name.md'),
+            systemPromptPath: join(dir, 'also-missing.md'),
             config: {},
-            _spawnFn: async () => {
-              throw new Error('claude exited with 1');
-            },
           }),
-        (err) => err instanceof RcaError,
+        (error) => {
+          assert.strictEqual(error.code, 'DISK_ERROR');
+          assert.strictEqual(
+            error.message,
+            'Filesystem error during reading analyst input: unavailable.',
+          );
+          assert.deepStrictEqual(error.context, {
+            op: 'reading analyst input',
+            errno: 'unavailable',
+          });
+          assert.ok(!error.message.includes('private-missing-name.md'));
+          return true;
+        },
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });

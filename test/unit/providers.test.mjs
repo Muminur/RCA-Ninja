@@ -1,11 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { getProvider, SUPPORTED_PROVIDERS } from '../../src/providers/index.mjs';
-import { resolveBinary, toStrictSchema } from '../../src/providers/shared.mjs';
+import * as shared from '../../src/providers/shared.mjs';
 import * as claude from '../../src/providers/claude.mjs';
 import * as codex from '../../src/providers/codex.mjs';
 import { RcaError } from '../../src/errors.mjs';
@@ -25,18 +26,24 @@ const FAKE_CONTEXT = {
 
 describe('resolveBinary', () => {
   it('splits a plain binary name', () => {
-    assert.deepStrictEqual(resolveBinary('claude', 'claude'), { cmd: 'claude', cmdPrefix: [] });
+    assert.deepStrictEqual(shared.resolveBinary('claude', 'claude'), {
+      cmd: 'claude',
+      cmdPrefix: [],
+    });
   });
 
   it('splits "node /path/to/stub.mjs" into cmd + prefix args', () => {
-    assert.deepStrictEqual(resolveBinary('node /tmp/stub.mjs', 'claude'), {
+    assert.deepStrictEqual(shared.resolveBinary('node /tmp/stub.mjs', 'claude'), {
       cmd: 'node',
       cmdPrefix: ['/tmp/stub.mjs'],
     });
   });
 
   it('uses the fallback when binary is undefined', () => {
-    assert.deepStrictEqual(resolveBinary(undefined, 'codex'), { cmd: 'codex', cmdPrefix: [] });
+    assert.deepStrictEqual(shared.resolveBinary(undefined, 'codex'), {
+      cmd: 'codex',
+      cmdPrefix: [],
+    });
   });
 });
 
@@ -64,7 +71,7 @@ describe('getProvider', () => {
 });
 
 describe('toStrictSchema', () => {
-  const strict = toStrictSchema(JSON.parse(RCA_SCHEMA_STR));
+  const strict = shared.toStrictSchema(JSON.parse(RCA_SCHEMA_STR));
 
   it('marks every top-level property as required', () => {
     assert.deepStrictEqual(
@@ -97,38 +104,52 @@ describe('toStrictSchema', () => {
 });
 
 describe('claude adapter — buildGenerateInvocation', () => {
-  it('produces the canonical claude argv and no stdin input', () => {
-    const inv = claude.buildGenerateInvocation({
-      config: { claude: { binary: 'claude' } },
-      contextFile: '/tmp/ctx.json',
-      diffFile: '/tmp/diff.txt',
-      systemPrompt: 'SYS',
-      schemaStr: RCA_SCHEMA_STR,
-    });
-    assert.strictEqual(inv.cmd, 'claude');
-    assert.strictEqual(inv.input, undefined, 'claude passes the prompt via -p, not stdin');
-    for (const flag of [
-      '-p',
-      '--append-system-prompt',
-      '--output-format',
-      '--json-schema',
-      '--allowedTools',
-      '--permission-mode',
-    ]) {
-      assert.ok(inv.argv.includes(flag), `argv must include ${flag}`);
+  it('uses a fixed binary, stdin payload, isolated cwd, and non-overridable safety flags', () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'provider-test-'));
+    try {
+      const payload = JSON.stringify({ marker: 'x'.repeat(50_000) });
+      const inv = claude.buildGenerateInvocation({
+        config: {
+          claude: {
+            binary: 'attacker-controlled',
+            allowed_tools: 'Read,Write,Bash',
+            permission_mode: 'bypassPermissions',
+            use_bare: false,
+          },
+        },
+        payload,
+        schemaStr: RCA_SCHEMA_STR,
+        workspaceDir,
+      });
+      assert.strictEqual(inv.cmd, 'claude');
+      assert.strictEqual(inv.cwd, workspaceDir);
+      assert.ok(inv.input.includes(payload), 'the complete payload must use stdin');
+      assert.ok(!inv.argv.some((arg) => arg.length > 10_000), 'large input must not enter argv');
+      for (const flag of [
+        '--bare',
+        '--safe-mode',
+        '--tools',
+        '--no-session-persistence',
+        '--output-format',
+        '--json-schema',
+      ]) {
+        assert.ok(inv.argv.includes(flag), `argv must include ${flag}`);
+      }
+      assert.strictEqual(inv.argv[inv.argv.indexOf('--tools') + 1], '');
+      assert.ok(!inv.argv.includes('Read,Write,Bash'));
+      assert.ok(!inv.argv.includes('bypassPermissions'));
+      assert.ok(!inv.argv.some((arg) => arg.includes(payload)));
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
     }
-    const pmIdx = inv.argv.indexOf('--permission-mode');
-    assert.strictEqual(inv.argv[pmIdx + 1], 'plan');
-    assert.ok(!inv.argv.includes('--bare'), 'argv must never contain --bare');
   });
 
   it('extractRca reads structured_output', () => {
     const inv = claude.buildGenerateInvocation({
       config: {},
-      contextFile: '/tmp/c',
-      diffFile: '/tmp/d',
-      systemPrompt: 'S',
+      payload: '{}',
       schemaStr: RCA_SCHEMA_STR,
+      workspaceDir: tmpdir(),
     });
     const out = inv.extractRca(
       JSON.stringify({ structured_output: { title: 'x' }, total_cost_usd: 0.5, session_id: 's1' }),
@@ -137,55 +158,191 @@ describe('claude adapter — buildGenerateInvocation', () => {
     assert.strictEqual(out.cost, 0.5);
     assert.strictEqual(out.sessionId, 's1');
   });
+
+  it('returns only a static parse error for malformed provider output', () => {
+    const inv = claude.buildGenerateInvocation({
+      config: {},
+      payload: '{}',
+      schemaStr: RCA_SCHEMA_STR,
+      workspaceDir: tmpdir(),
+    });
+    const sensitiveText = 'private provider output must not appear';
+
+    for (const output of [sensitiveText, JSON.stringify({ result: sensitiveText })]) {
+      assert.throws(
+        () => inv.extractRca(output),
+        (error) => {
+          assert.strictEqual(error.code, 'SCHEMA_VALIDATION');
+          assert.strictEqual(
+            error.context.ajv_first_error,
+            'Could not parse RCA JSON from claude output',
+          );
+          assert.ok(!error.message.includes(sensitiveText));
+          assert.ok(!JSON.stringify(error.context).includes(sensitiveText));
+          return true;
+        },
+      );
+    }
+  });
+
+  it('returns only a static parse error for malformed analyst output', () => {
+    const inv = claude.buildAnalystInvocation({
+      config: {},
+      payload: '{}',
+      workspaceDir: tmpdir(),
+    });
+    const sensitiveText = 'PRIVATE_PROVIDER_ANALYST_OUTPUT';
+
+    assert.throws(
+      () => inv.extractVerdict(sensitiveText),
+      (error) => {
+        assert.strictEqual(error.code, 'SCHEMA_VALIDATION');
+        assert.strictEqual(
+          error.context.ajv_first_error,
+          'Could not parse analyst JSON from claude output',
+        );
+        assert.ok(!error.message.includes(sensitiveText));
+        assert.ok(!JSON.stringify(error.context).includes(sensitiveText));
+        return true;
+      },
+    );
+  });
 });
 
 describe('codex adapter — buildGenerateInvocation', () => {
-  it('produces a `codex exec` invocation with schema/output flags and stdin input', () => {
+  it('uses documented fixed flags, isolated cwd, workspace temp files, and stdin only', () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'provider-test-'));
     const inv = codex.buildGenerateInvocation({
-      config: { codex: { binary: 'codex' } },
-      systemPrompt: 'SYS-PROMPT',
+      config: {
+        codex: {
+          binary: 'attacker-controlled',
+          sandbox: 'danger-full-access',
+          model: 'gpt-x',
+        },
+      },
+      payload: JSON.stringify({ marker: 'complete-provider-payload', context: FAKE_CONTEXT }),
       schemaStr: RCA_SCHEMA_STR,
-      context: FAKE_CONTEXT,
-      priorRcas: [],
+      workspaceDir,
     });
     try {
       assert.strictEqual(inv.cmd, 'codex');
+      assert.strictEqual(inv.cwd, workspaceDir);
       assert.strictEqual(inv.argv[0], 'exec');
-      for (const flag of ['--sandbox', '--skip-git-repo-check', '--output-schema', '-o']) {
+      for (const flag of [
+        '--sandbox',
+        '--ignore-user-config',
+        '--ignore-rules',
+        '--ephemeral',
+        '--strict-config',
+        '--skip-git-repo-check',
+        '--cd',
+        '--output-schema',
+        '-o',
+      ]) {
         assert.ok(inv.argv.includes(flag), `argv must include ${flag}`);
       }
       const sIdx = inv.argv.indexOf('--sandbox');
       assert.strictEqual(inv.argv[sIdx + 1], 'read-only');
-      // The prompt (with the diff) goes via stdin, NOT argv — avoids arg-length limits.
-      assert.ok(typeof inv.input === 'string' && inv.input.includes('SYS-PROMPT'));
-      assert.ok(
-        inv.input.includes(FAKE_CONTEXT.diff),
-        'diff must be inlined into the stdin prompt',
-      );
-      assert.ok(
-        !inv.argv.some((a) => a.includes(FAKE_CONTEXT.diff)),
-        'diff must not appear in argv',
-      );
+      assert.strictEqual(inv.argv[inv.argv.indexOf('--cd') + 1], workspaceDir);
+      assert.ok(typeof inv.input === 'string' && inv.input.includes('complete-provider-payload'));
+      assert.ok(!inv.argv.some((arg) => arg.includes(FAKE_CONTEXT.diff)));
+      assert.ok(inv.argv[inv.argv.indexOf('--output-schema') + 1].startsWith(workspaceDir));
+      assert.ok(inv.argv[inv.argv.indexOf('-o') + 1].startsWith(workspaceDir));
+      assert.ok(!inv.argv.includes('danger-full-access'));
+      assert.ok(inv.argv.includes('gpt-x'));
+      assert.ok(!inv.argv.includes('shell_tool'));
+      assert.ok(!inv.argv.includes('shell_snapshot'));
     } finally {
       inv.cleanup();
+      rmSync(workspaceDir, { recursive: true, force: true });
     }
   });
 
-  it('honors sandbox and model overrides', () => {
-    const inv = codex.buildGenerateInvocation({
-      config: { codex: { binary: 'codex', sandbox: 'workspace-write', model: 'gpt-x' } },
-      systemPrompt: 'S',
-      schemaStr: RCA_SCHEMA_STR,
-      context: FAKE_CONTEXT,
+  it('does not expose source RCA paths in analyst input', () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'provider-test-'));
+    const sourcePath = join(ROOT, 'private', 'RCA-secret.md');
+    const documentContent = '## Root Cause\nThe validated document body.';
+    const inv = codex.buildAnalystInvocation({
+      config: {},
+      payload: JSON.stringify({ systemPrompt: 'Analyze carefully.', documentContent }),
+      workspaceDir,
     });
     try {
-      const sIdx = inv.argv.indexOf('--sandbox');
-      assert.strictEqual(inv.argv[sIdx + 1], 'workspace-write');
-      const mIdx = inv.argv.indexOf('--model');
-      assert.strictEqual(inv.argv[mIdx + 1], 'gpt-x');
+      assert.ok(inv.input.includes('The validated document body.'));
+      assert.ok(!inv.input.includes(sourcePath));
     } finally {
       inv.cleanup();
+      rmSync(workspaceDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('provider environment allowlist', () => {
+  it('fails closed when a sterile absolute provider root cannot be formed', () => {
+    for (const workspaceDir of [undefined, '', 'relative-provider-root']) {
+      assert.throws(
+        () => shared.buildProviderEnv('codex', { PATH: '/bin' }, workspaceDir),
+        (error) => error instanceof RcaError && error.code === 'PROVIDER_ISOLATION_UNAVAILABLE',
+      );
+    }
+  });
+
+  it('gives Claude sterile roots and no inherited auth, profile, or unrelated secrets', () => {
+    const workspaceDir = join(tmpdir(), 'sterile-claude-workspace');
+    const env = shared.buildProviderEnv(
+      'claude',
+      {
+        PATH: '/bin',
+        ANTHROPIC_API_KEY: 'test-anthropic-auth',
+        CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth-auth',
+        HOME: '/real/profile',
+        USERPROFILE: 'C:\\real\\profile',
+        APPDATA: 'C:\\real\\profile\\appdata',
+        TEMP: 'C:\\real\\temp',
+        DATABASE_URL: 'must-not-leak',
+      },
+      workspaceDir,
+    );
+    assert.deepStrictEqual(env, {
+      PATH: '/bin',
+      HOME: workspaceDir,
+      USERPROFILE: workspaceDir,
+      APPDATA: workspaceDir,
+      LOCALAPPDATA: workspaceDir,
+      TEMP: workspaceDir,
+      TMP: workspaceDir,
+      TMPDIR: workspaceDir,
+      CLAUDE_CONFIG_DIR: workspaceDir,
+    });
+  });
+
+  it('gives Codex sterile roots and no inherited auth, profile, or unrelated secrets', () => {
+    const workspaceDir = join(tmpdir(), 'sterile-codex-workspace');
+    const env = shared.buildProviderEnv(
+      'codex',
+      {
+        PATH: '/bin',
+        OPENAI_API_KEY: 'test-openai-auth',
+        CODEX_API_KEY: 'must-not-leak',
+        HOME: '/real/profile',
+        USERPROFILE: 'C:\\real\\profile',
+        APPDATA: 'C:\\real\\profile\\appdata',
+        TEMP: 'C:\\real\\temp',
+        DATABASE_URL: 'must-not-leak',
+      },
+      workspaceDir,
+    );
+    assert.deepStrictEqual(env, {
+      PATH: '/bin',
+      HOME: workspaceDir,
+      USERPROFILE: workspaceDir,
+      APPDATA: workspaceDir,
+      LOCALAPPDATA: workspaceDir,
+      TEMP: workspaceDir,
+      TMP: workspaceDir,
+      TMPDIR: workspaceDir,
+      CODEX_HOME: workspaceDir,
+    });
   });
 });
 
