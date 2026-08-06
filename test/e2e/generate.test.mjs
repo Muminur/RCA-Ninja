@@ -1,15 +1,19 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { generate } from '../../src/generator.mjs';
 import {
   installGitleaksStub,
   scannerReceiptMarker,
   scannerRejectPayload,
 } from '../fixtures/gitleaks-test-env.mjs';
+
+const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-generate-bootstrap-'));
+process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+const { generate } = await import('../../src/generator.mjs');
+process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
 
 function generationInput(dir, overrides = {}) {
   const systemPromptPath = join(dir, 'system-prompt.txt');
@@ -18,6 +22,7 @@ function generationInput(dir, overrides = {}) {
   writeFileSync(schemaPath, JSON.stringify({ type: 'object', marker: 'schema sentinel' }), 'utf8');
   return {
     context: {
+      repo_root: dir,
       short_hash: 'abc1234',
       branch: 'main',
       commit_message: 'fix: refuse unisolated providers',
@@ -34,15 +39,33 @@ function generationInput(dir, overrides = {}) {
 }
 
 describe('generate provider security gate', () => {
+  it('refuses generation without a canonical workspace root before scanner delivery', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rca-generate-missing-root-'));
+    const receiptPath = join(dir, 'scanner-receipt.json');
+
+    try {
+      const input = generationInput(dir, {
+        systemPrompt: `system prompt sentinel\n${scannerReceiptMarker(receiptPath)}`,
+      });
+      delete input.context.repo_root;
+
+      await assert.rejects(
+        () => generate(input),
+        (error) => error.code === 'SECRET_SCANNER_UNAVAILABLE',
+      );
+      assert.strictEqual(existsSync(receiptPath), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('scans input and refuses provider isolation while ignoring public bypasses', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'rca-generate-isolation-'));
     const receiptPath = join(dir, 'scanner-receipt.json');
-    const originalPath = process.env.PATH;
     let injectedScanCalls = 0;
     let injectedRunCalls = 0;
 
     try {
-      process.env.PATH = installGitleaksStub(dir);
       const input = generationInput(dir, {
         systemPrompt: `system prompt sentinel\n${scannerReceiptMarker(receiptPath)}`,
       });
@@ -93,7 +116,6 @@ describe('generate provider security gate', () => {
       assert.deepStrictEqual(scanned.priorRcas, [{ title: 'prior RCA sentinel' }]);
       assert.strictEqual(scanned.correctionHint, 'correction sentinel');
     } finally {
-      process.env.PATH = originalPath;
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -101,10 +123,8 @@ describe('generate provider security gate', () => {
   it('sends explicit null optionals through the real scanner path', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'rca-generate-null-payload-'));
     const receiptPath = join(dir, 'scanner-receipt.json');
-    const originalPath = process.env.PATH;
 
     try {
-      process.env.PATH = installGitleaksStub(dir);
       const input = generationInput(dir, {
         systemPrompt: `system prompt sentinel\n${scannerReceiptMarker(receiptPath)}`,
       });
@@ -120,19 +140,16 @@ describe('generate provider security gate', () => {
       assert.strictEqual(scanned.priorRcas, null);
       assert.strictEqual(scanned.correctionHint, null);
     } finally {
-      process.env.PATH = originalPath;
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it('uses only the real scanner path and redacts scanner diagnostics', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'rca-generate-scan-reject-'));
-    const originalPath = process.env.PATH;
     let injectedScanCalls = 0;
     let injectedRunCalls = 0;
 
     try {
-      process.env.PATH = installGitleaksStub(dir);
       const input = generationInput(dir, { systemPrompt: scannerRejectPayload() });
 
       await assert.rejects(
@@ -158,7 +175,6 @@ describe('generate provider security gate', () => {
       assert.strictEqual(injectedScanCalls, 0);
       assert.strictEqual(injectedRunCalls, 0);
     } finally {
-      process.env.PATH = originalPath;
       rmSync(dir, { recursive: true, force: true });
     }
   });

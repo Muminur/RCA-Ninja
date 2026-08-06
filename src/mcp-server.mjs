@@ -16,6 +16,7 @@ import { syncToVault, appendDailyNote } from './obsidian.mjs';
 import { auditCorpus } from './audit.mjs';
 import { computeTrends } from './trends.mjs';
 import { amendRca } from './amend.mjs';
+import { isFailClosedProviderError } from './provider-safety.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -243,13 +244,12 @@ async function handleTool(name, args, cfg, dependencies = {}) {
     case 'rca_generate': {
       const ref = args.ref || 'HEAD';
       const buildContextFn = dependencies.buildContext || buildContext;
-      const generateFn = dependencies.generate || generate;
       const context = await buildContextFn({ cwd, ref });
 
       const systemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
       const schemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
 
-      const { rca } = await generateFn({ context, config: cfg, systemPromptPath, schemaPath });
+      const { rca } = await generate({ context, config: cfg, systemPromptPath, schemaPath });
       const md = renderRca(rca, context);
       const date = context.timestamp_utc.slice(0, 10);
 
@@ -504,7 +504,7 @@ async function handleTool(name, args, cfg, dependencies = {}) {
 }
 
 function staticToolError(err) {
-  if (err?.code === 'SECRET_SCAN_FAILED' || err?.code === 'SECRET_SCANNER_UNAVAILABLE') {
+  if (isFailClosedProviderError(err)) {
     return new RcaError(err.code).message;
   }
   return err instanceof Error ? err.message : 'Tool request failed.';

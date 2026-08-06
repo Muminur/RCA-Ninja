@@ -3,10 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createProgram } from '../../src/cli.mjs';
+import { RcaError } from '../../src/errors.mjs';
 import { installGitleaksStub, scannerRejectPayload } from '../fixtures/gitleaks-test-env.mjs';
 
 const EXIT_SENTINEL = Symbol('mock-exit');
+const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-mcp-bootstrap-'));
+process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+const { createProgram } = await import('../../src/cli.mjs');
+process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
 
 async function captureStdout(fn) {
   const chunks = [];
@@ -44,9 +48,7 @@ describe('mcp-server module', () => {
 
   it('returns a static error when central generation rejects a scanner payload', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-mcp-scanner-'));
-    const originalPath = process.env.PATH;
     try {
-      process.env.PATH = installGitleaksStub(dir);
       const { dispatchToolRequest } = await import('../../src/mcp-server.mjs');
       assert.strictEqual(typeof dispatchToolRequest, 'function');
 
@@ -56,6 +58,7 @@ describe('mcp-server module', () => {
         cfg: { output_dir: join(dir, 'rca') },
         dependencies: {
           buildContext: async () => ({
+            repo_root: dir,
             short_hash: 'abc1234',
             branch: 'main',
             commit_message: 'fix: scanner rejection',
@@ -73,10 +76,73 @@ describe('mcp-server module', () => {
       assert.doesNotMatch(text, /sensitive diagnostics/i);
       assert.doesNotMatch(text, /SCANNER_REJECT/);
     } finally {
-      if (originalPath === undefined) delete process.env.PATH;
-      else process.env.PATH = originalPath;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('ignores an injected generator and keeps MCP generation behind the central gate', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-mcp-generator-bypass-'));
+    let injectedCalls = 0;
+    try {
+      const { dispatchToolRequest } = await import('../../src/mcp-server.mjs');
+      const result = await dispatchToolRequest({
+        name: 'rca_generate',
+        args: { cwd: dir, ref: 'HEAD' },
+        cfg: { output_dir: join(dir, 'rca') },
+        dependencies: {
+          buildContext: async () => ({
+            repo_root: dir,
+            short_hash: 'abc1234',
+            branch: 'main',
+            commit_message: 'fix: central generation gate',
+            files_changed: ['src/example.mjs'],
+            diff: 'safe diff',
+            logs: null,
+            timestamp_utc: '2026-08-05T00:00:00.000Z',
+          }),
+          generate: async () => {
+            injectedCalls += 1;
+            const error = new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+            error.message = 'private injected generator diagnostic';
+            throw error;
+          },
+        },
+      });
+
+      const text = result.content.map((entry) => entry.text).join('\n');
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(
+        text,
+        'Error: No approved isolated provider broker is available; provider execution was refused.',
+      );
+      assert.strictEqual(injectedCalls, 0);
+      assert.doesNotMatch(text, /private injected generator diagnostic/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts forged provider safety errors from retained non-generation test support', async () => {
+    const { dispatchToolRequest } = await import('../../src/mcp-server.mjs');
+    const error = new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+    error.message = 'private build-context diagnostic';
+    const result = await dispatchToolRequest({
+      name: 'rca_generate',
+      cfg: { output_dir: join(tmpdir(), 'unused-rca-output') },
+      dependencies: {
+        buildContext: async () => {
+          throw error;
+        },
+      },
+    });
+
+    const text = result.content.map((entry) => entry.text).join('\n');
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(
+      text,
+      'Error: No approved isolated provider broker is available; provider execution was refused.',
+    );
+    assert.doesNotMatch(text, /private build-context diagnostic/i);
   });
 });
 

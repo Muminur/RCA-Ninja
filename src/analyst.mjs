@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import matter from 'gray-matter';
 import { RcaError } from './errors.mjs';
 import { scanProviderPayload } from './secret-scan.mjs';
@@ -18,11 +19,12 @@ function stripFrontmatter(content) {
  * @param {{
  *   writtenPath: string,
  *   systemPromptPath: string,
- *   config: object
+ *   config: object,
+ *   cwd?: string
  * }} opts
  * @returns {Promise<{ verdict: 'PUBLISH'|'REVISE'|'REJECT', findings: string }>}
  */
-export async function runAnalyst({ writtenPath, systemPromptPath, config: _config }) {
+export async function runAnalyst({ writtenPath, systemPromptPath, config: _config, cwd }) {
   let systemPromptRaw;
   let documentContent;
   try {
@@ -36,7 +38,9 @@ export async function runAnalyst({ writtenPath, systemPromptPath, config: _confi
   }
   const systemPrompt = stripFrontmatter(systemPromptRaw);
   const payload = JSON.stringify({ systemPrompt, documentContent });
+  const rootCandidate = cwd ?? dirname(writtenPath);
+  const workspaceRoot = typeof rootCandidate === 'string' ? resolve(rootCandidate) : rootCandidate;
 
-  await scanProviderPayload({ payload });
+  await scanProviderPayload({ payload, workspaceRoot });
   throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
 }

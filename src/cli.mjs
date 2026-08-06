@@ -1,8 +1,8 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
-import { basename, dirname, join, resolve as resolvePath } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import {
@@ -27,11 +27,12 @@ import { resolveTemplatePaths } from './template.mjs';
 import { auditCorpus } from './audit.mjs';
 import { findRelatedRcas, readPriorRcas, detectRecurrences } from './dedup.mjs';
 import { runAnalyst } from './analyst.mjs';
+import { throwIfFailClosedProviderError } from './provider-safety.mjs';
+import { checkSecretScannerReadiness } from './secret-scan.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const pkg = require(join(__dirname, '..', 'package.json'));
-const MIN_GITLEAKS_VERSION = [8, 30, 1];
 const SECRET_SCANNER_REMEDIATION =
   'Gitleaks 8.30.1 or newer is required; install or upgrade Gitleaks. Scanner failure refuses provider execution.';
 
@@ -41,31 +42,66 @@ function secretScannerError() {
   return error;
 }
 
-function checkSecretScanner(execFile, cwd) {
-  let output;
+function checkSecretScanner(cwd) {
   try {
-    output = execFile('gitleaks', ['version'], {
-      cwd,
-      encoding: 'utf8',
-      timeout: 5000,
-      maxBuffer: 64 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore'],
-      windowsHide: true,
-    }).trim();
+    return checkSecretScannerReadiness(resolvePath(cwd));
   } catch {
     throw secretScannerError();
   }
+}
 
-  const match = output.match(/(?:^|\D)(\d+)\.(\d+)\.(\d+)(?:\D|$)/);
-  if (!match) throw secretScannerError();
-  const actual = match.slice(1, 4).map(Number);
-  for (let index = 0; index < MIN_GITLEAKS_VERSION.length; index += 1) {
-    if (actual[index] > MIN_GITLEAKS_VERSION[index]) break;
-    if (actual[index] < MIN_GITLEAKS_VERSION[index]) {
-      throw secretScannerError();
-    }
+function unsafeGitEnvironmentVariable() {
+  return Object.keys(process.env).find((name) => {
+    const normalized = name.toUpperCase();
+    return (
+      normalized.startsWith('GIT_CONFIG') ||
+      normalized === 'GIT_DIR' ||
+      normalized === 'GIT_WORK_TREE' ||
+      normalized === 'GIT_COMMON_DIR' ||
+      normalized === 'GIT_ATTR_NOSYSTEM'
+    );
+  });
+}
+
+function canonicalizePath(path) {
+  let existing = resolvePath(path);
+  const missing = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) return null;
+    missing.unshift(basename(existing));
+    existing = parent;
   }
-  return output.split(/\r?\n/, 1)[0];
+  return resolvePath(realpathSync(existing), ...missing);
+}
+
+function pathIsWithin(path, root) {
+  const child = relative(root, path);
+  return (
+    child === '' ||
+    (child !== '..' && !child.startsWith(`..${pathSeparator}`) && !isAbsolute(child))
+  );
+}
+
+const pathSeparator = process.platform === 'win32' ? '\\' : '/';
+
+function hookDirIsRepositoryLocal(execSync, cwd, hookDir) {
+  const canonicalHookDir = canonicalizePath(hookDir);
+  if (!canonicalHookDir) return false;
+  const roots = ['--show-toplevel', '--absolute-git-dir', '--git-common-dir'];
+  return roots.some((query) => {
+    let root;
+    try {
+      root = execSync('git', ['rev-parse', '--path-format=absolute', query], {
+        cwd,
+        encoding: 'utf8',
+      }).trim();
+    } catch {
+      return false;
+    }
+    const canonicalRoot = canonicalizePath(root);
+    return canonicalRoot ? pathIsWithin(canonicalHookDir, canonicalRoot) : false;
+  });
 }
 
 export function createProgram() {
@@ -297,7 +333,7 @@ export function createProgram() {
           () => execSync('rg', ['--version'], { encoding: 'utf8' }).trim().split('\n')[0],
         );
 
-        doctorCheck('secret-scanner', () => checkSecretScanner(execSync, cwd));
+        doctorCheck('secret-scanner', () => checkSecretScanner(cwd));
 
         let setupProvider = 'claude';
         let setupBinary = 'claude';
@@ -620,8 +656,10 @@ export function createProgram() {
               writtenPath,
               systemPromptPath: analystPromptPath,
               config: cfg,
+              cwd: resolvePath(cwd),
             });
-          } catch {
+          } catch (analystError) {
+            throwIfFailClosedProviderError(analystError);
             process.stderr.write('⚠ Analyst failed — skipping quality check\n');
           }
           progress.stop();
@@ -657,6 +695,7 @@ export function createProgram() {
                     process.stderr.write(`Amended: ${amended.path}\n`);
                     writtenPath = amended.path;
                   } catch (amendErr) {
+                    throwIfFailClosedProviderError(amendErr);
                     process.stderr.write(`⚠ Amend failed: ${amendErr.message}\n`);
                   }
                 }
@@ -828,7 +867,12 @@ export function createProgram() {
     .description('Check local hooks, Gitleaks, provider safety, and RCA dependencies')
     .action(async () => {
       const { execFileSync: execSync } = await import('node:child_process');
-      const { existsSync: fsExistsSync, readFileSync: fsReadFileSync } = await import('node:fs');
+      const {
+        existsSync: fsExistsSync,
+        lstatSync: fsLstatSync,
+        readFileSync: fsReadFileSync,
+        realpathSync: fsRealpathSync,
+      } = await import('node:fs');
       const { join: pathJoin } = await import('node:path');
       const checks = [];
       let failures = 0;
@@ -864,7 +908,7 @@ export function createProgram() {
 
       let scannerHealthy = false;
       check('secret-scanner', () => {
-        const detail = checkSecretScanner(execSync, program.opts().cwd || process.cwd());
+        const detail = checkSecretScanner(program.opts().cwd || process.cwd());
         scannerHealthy = true;
         return detail;
       });
@@ -908,46 +952,109 @@ export function createProgram() {
       // Honour only an effective core.hooksPath whose origin is the repository's
       // local config. Global, system, and command-scope values can redirect Git
       // to machine-wide hooks and are not local pipeline wiring.
-      let hooksDir;
-      try {
-        hooksDir = execSync('git', ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'], {
-          cwd: doctorCwd,
-          encoding: 'utf8',
-        }).trim();
-      } catch {
-        hooksDir = null;
-      }
+      const unsafeGitEnvironment = unsafeGitEnvironmentVariable();
+      let hooksDir = null;
+      let configuredHooksDir = null;
       let nonLocalHooksPathOrigin = null;
-      try {
-        const effectiveConfig = execSync(
-          'git',
-          ['config', '--show-origin', '--get', 'core.hooksPath'],
-          {
-            cwd: doctorCwd,
-            encoding: 'utf8',
-          },
-        ).trim();
-        const effectiveOrigin = effectiveConfig.split('\t', 1)[0];
-        let localOrigin = '';
+      let hookPathOutsideRepository = false;
+      let unsafeHooksDirectory = false;
+      if (!unsafeGitEnvironment) {
         try {
-          const localConfig = execSync(
+          hooksDir = execSync(
             'git',
-            ['config', '--local', '--show-origin', '--get', 'core.hooksPath'],
+            ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'],
             {
               cwd: doctorCwd,
               encoding: 'utf8',
             },
           ).trim();
-          localOrigin = localConfig.split('\t', 1)[0];
         } catch {
-          // No repository-local override.
+          hooksDir = null;
         }
-        if (effectiveOrigin !== localOrigin) nonLocalHooksPathOrigin = effectiveOrigin;
-      } catch {
-        // No effective core.hooksPath; Git's repository-local default is safe.
+        try {
+          const effectiveConfig = execSync(
+            'git',
+            ['config', '--show-origin', '--get', 'core.hooksPath'],
+            {
+              cwd: doctorCwd,
+              encoding: 'utf8',
+            },
+          ).trim();
+          let localConfig = '';
+          try {
+            localConfig = execSync(
+              'git',
+              ['config', '--local', '--show-origin', '--get', 'core.hooksPath'],
+              {
+                cwd: doctorCwd,
+                encoding: 'utf8',
+              },
+            ).trim();
+          } catch {
+            // No repository-local override.
+          }
+          if (effectiveConfig !== localConfig) {
+            nonLocalHooksPathOrigin = effectiveConfig.split('\t', 1)[0];
+          } else if (localConfig) {
+            const configuredPath = execSync(
+              'git',
+              ['config', '--local', '--path', '--get', 'core.hooksPath'],
+              {
+                cwd: doctorCwd,
+                encoding: 'utf8',
+              },
+            ).trim();
+            if (configuredPath) {
+              let hookBase = doctorCwd;
+              try {
+                hookBase = execSync(
+                  'git',
+                  ['rev-parse', '--path-format=absolute', '--show-toplevel'],
+                  { cwd: doctorCwd, encoding: 'utf8' },
+                ).trim();
+              } catch {
+                hookBase = execSync(
+                  'git',
+                  ['rev-parse', '--path-format=absolute', '--absolute-git-dir'],
+                  { cwd: doctorCwd, encoding: 'utf8' },
+                ).trim();
+              }
+              configuredHooksDir = isAbsolute(configuredPath)
+                ? resolvePath(configuredPath)
+                : resolvePath(hookBase, configuredPath);
+            }
+          }
+        } catch {
+          // No effective core.hooksPath; Git's repository-local default is safe.
+        }
+        if (
+          hooksDir &&
+          !nonLocalHooksPathOrigin &&
+          !hookDirIsRepositoryLocal(execSync, doctorCwd, hooksDir)
+        ) {
+          hookPathOutsideRepository = true;
+        }
+        const hooksDirectoryToValidate = configuredHooksDir || hooksDir;
+        if (hooksDirectoryToValidate && !nonLocalHooksPathOrigin) {
+          try {
+            const hookDirStat = fsLstatSync(hooksDirectoryToValidate);
+            unsafeHooksDirectory =
+              hookDirStat.isSymbolicLink() ||
+              !hookDirStat.isDirectory() ||
+              canonicalizePath(hooksDirectoryToValidate) !== canonicalizePath(hooksDir);
+          } catch {
+            unsafeHooksDirectory = true;
+          }
+        }
       }
       let hookHealthy = false;
-      if (!hooksDir) {
+      if (unsafeGitEnvironment) {
+        note(
+          'hook',
+          'WARN',
+          `unsafe Git environment variable ${unsafeGitEnvironment}; hook validation refused`,
+        );
+      } else if (!hooksDir) {
         note('hook', 'WARN', 'not a git repository');
       } else if (nonLocalHooksPathOrigin) {
         note(
@@ -955,12 +1062,33 @@ export function createProgram() {
           'WARN',
           `effective core.hooksPath from ${nonLocalHooksPathOrigin} is not repository-local`,
         );
+      } else if (hookPathOutsideRepository) {
+        note('hook', 'WARN', `hooks path ${hooksDir} is outside repository-owned roots`);
+      } else if (unsafeHooksDirectory) {
+        note('hook', 'WARN', `unsafe hooks directory at ${configuredHooksDir || hooksDir}`);
       } else {
         const hookFile = pathJoin(hooksDir, 'post-commit');
         if (!fsExistsSync(hookFile)) {
           note('hook', 'WARN', `no post-commit hook at ${hookFile} — run '${cliName} init'`);
-        } else if (!fsReadFileSync(hookFile, 'utf8').includes('claude-rca')) {
-          note('hook', 'WARN', `post-commit at ${hookFile} is not an RCA hook`);
+        } else if (
+          (() => {
+            try {
+              const hookStat = fsLstatSync(hookFile);
+              return hookStat.isSymbolicLink() || !hookStat.isFile() || hookStat.nlink !== 1;
+            } catch {
+              return true;
+            }
+          })()
+        ) {
+          note('hook', 'WARN', `unsafe managed hook file at ${hookFile}`);
+        } else if (!hookDirIsRepositoryLocal(execSync, doctorCwd, fsRealpathSync(hookFile))) {
+          note('hook', 'WARN', `managed hook at ${hookFile} is outside repository-owned roots`);
+        } else if (
+          !fsReadFileSync(hookFile, 'utf8')
+            .split(/\r?\n/)
+            .includes('# codex-rca-managed-hook: post-commit')
+        ) {
+          note('hook', 'WARN', `post-commit at ${hookFile} is not a managed RCA hook`);
         } else {
           hookHealthy = true;
           note('hook', 'ok', hookFile);

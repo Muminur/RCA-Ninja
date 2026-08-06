@@ -20,13 +20,28 @@ export function pathWithoutGitleaks() {
     .join(delimiter);
 }
 
-export function installGitleaksStub(rootDir) {
+export function installGitleaksStub(
+  rootDir,
+  { version = '8.30.1', identity = '', replaceOnVersionPath = '', cwdReceiptPath = '' } = {},
+) {
   const binDir = join(rootDir, 'scanner-bin');
   mkdirSync(binDir, { recursive: true });
 
   if (process.platform === 'win32') {
     const sourcePath = join(binDir, 'GitleaksStub.cs');
     const executable = join(binDir, 'gitleaks.exe');
+    const csharpIdentity = identity.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+    const csharpReplacementPath = replaceOnVersionPath
+      .replaceAll('\\', '\\\\')
+      .replaceAll('"', '\\"');
+    const csharpCwdReceiptPath = cwdReceiptPath.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+    const csharpVersionMutation = csharpReplacementPath
+      ? `File.WriteAllText("${csharpReplacementPath}", "replaced during version validation");`
+      : '';
+    const csharpCwdReceipt = csharpCwdReceiptPath
+      ? `File.WriteAllText("${csharpCwdReceiptPath}", Directory.GetCurrentDirectory());`
+      : '';
+    const receiptContent = identity ? `"${csharpIdentity}\\n" + input` : 'input';
     writeFileSync(
       sourcePath,
       `using System;
@@ -36,11 +51,17 @@ using System.Text.RegularExpressions;
 
 public class GitleaksStub {
   public static int Main(string[] args) {
+    ${csharpCwdReceipt}
+    if (args.Length > 0 && args[0] == "version") {
+      ${csharpVersionMutation}
+      Console.WriteLine("gitleaks version ${version}");
+      return 0;
+    }
     string input = Console.In.ReadToEnd();
     Match receipt = Regex.Match(input, @"SCANNER_RECEIPT:([A-Za-z0-9+/=]+)");
     if (receipt.Success) {
       string path = Encoding.UTF8.GetString(Convert.FromBase64String(receipt.Groups[1].Value));
-      File.WriteAllText(path, input);
+      File.WriteAllText(path, ${receiptContent});
     }
     if (input.Contains("SCANNER_REJECT")) {
       Console.Error.Write("scanner emitted sensitive diagnostics that must be redacted");
@@ -69,25 +90,38 @@ public class GitleaksStub {
     return `${binDir}${delimiter}${process.env.PATH || ''}`;
   }
 
-  const stubPath = join(binDir, 'gitleaks-stub.mjs');
+  const executable = join(binDir, 'gitleaks');
   writeFileSync(
-    stubPath,
-    `import { writeFileSync } from 'node:fs';
+    executable,
+    `#!${process.execPath}
+const { writeFileSync } = require('node:fs');
+const replacementPath = ${JSON.stringify(replaceOnVersionPath)};
+const cwdReceiptPath = ${JSON.stringify(cwdReceiptPath)};
+if (cwdReceiptPath) writeFileSync(cwdReceiptPath, process.cwd());
+if (process.argv[2] === 'version') {
+  if (replacementPath) writeFileSync(replacementPath, 'replaced during version validation');
+  process.stdout.write(${JSON.stringify(`gitleaks version ${version}\n`)});
+  process.exit(0);
+}
 let input = '';
 process.stdin.setEncoding('utf8');
-for await (const chunk of process.stdin) input += chunk;
-const receipt = input.match(/SCANNER_RECEIPT:([A-Za-z0-9+/=]+)/);
-if (receipt) writeFileSync(Buffer.from(receipt[1], 'base64').toString('utf8'), input);
-if (input.includes('SCANNER_REJECT')) {
-  process.stderr.write('scanner emitted sensitive diagnostics that must be redacted');
-  process.exitCode = 1;
-}
+process.stdin.on('data', (chunk) => {
+  input += chunk;
+});
+process.stdin.on('end', () => {
+  const receipt = input.match(/SCANNER_RECEIPT:([A-Za-z0-9+/=]+)/);
+  if (receipt) {
+    const receiptContent = ${JSON.stringify(identity)} ? ${JSON.stringify(identity)} + '\\n' + input : input;
+    writeFileSync(Buffer.from(receipt[1], 'base64').toString('utf8'), receiptContent);
+  }
+  if (input.includes('SCANNER_REJECT')) {
+    process.stderr.write('scanner emitted sensitive diagnostics that must be redacted');
+    process.exitCode = 1;
+  }
+});
 `,
     'utf8',
   );
-
-  const executable = join(binDir, 'gitleaks');
-  writeFileSync(executable, `#!/bin/sh\nexec "${process.execPath}" "${stubPath}" "$@"\n`, 'utf8');
   chmodSync(executable, 0o755);
   return `${binDir}${delimiter}${process.env.PATH || ''}`;
 }

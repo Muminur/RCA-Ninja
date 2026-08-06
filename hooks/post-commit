@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# codex-rca-managed-hook: post-commit
 # codex-rca / claude-rca post-commit hook — generates an RCA when the commit
 # message starts with "fix:" (Conventional Commits) and the user has
 # enabled auto_generate in config.

@@ -5,8 +5,10 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
@@ -160,6 +162,20 @@ describe('doctor checks the RCA pipeline itself', () => {
     assert.doesNotMatch(stdout, /^secret-scanner\s+ok/m);
   });
 
+  it('fails closed for a prerelease at the minimum Gitleaks version boundary', () => {
+    const { repo, env } = makeRepo('claude-rca-doc-prerelease-scanner-');
+    writeFileSync(join(repo, '.claude-rca.json'), JSON.stringify({ version: 1 }));
+    const scannerRoot = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-prerelease-scanner-'));
+
+    const { stdout } = runDoctor(repo, {
+      ...env,
+      PATH: installVersionedGitleaks(scannerRoot, '8.30.1-rc.1'),
+    });
+
+    assert.match(stdout, /^secret-scanner\s+FAIL\s+Gitleaks 8\.30\.1 or newer is required;/m);
+    assert.doesNotMatch(stdout, /^secret-scanner\s+ok/m);
+  });
+
   it('reports auto_generate off as unavailable WARN with all prerequisites named', () => {
     const { repo, env } = makeRepo('claude-rca-doc-off-');
     writeFileSync(
@@ -222,9 +238,109 @@ describe('doctor checks the RCA pipeline itself', () => {
       GIT_CONFIG_VALUE_0: sharedHooks,
     });
 
-    assert.match(stdout, /^hook\s+WARN\s+.*not repository-local/im);
+    assert.match(stdout, /^hook\s+WARN\s+.*unsafe Git environment/im);
     assert.doesNotMatch(stdout, /^hook\s+ok/m);
     assert.match(stdout, /^auto-gen\s+FAIL\s+.*local hook/im);
+  });
+
+  it('refuses hook validation under ambient Git repository or config redirection', () => {
+    const { repo, env } = makeRepo('claude-rca-doc-env-refuse-');
+    const { repo: redirectedRepo } = makeRepo('claude-rca-doc-env-redirected-');
+    writeFileSync(join(repo, '.claude-rca.json'), JSON.stringify({ version: 1 }));
+    installLocalHook(repo);
+    const legacyConfig = join(repo, 'legacy.gitconfig');
+    writeFileSync(legacyConfig, '[core]\n\thooksPath = ignored\n', 'utf8');
+    const cases = [
+      { GIT_DIR: join(redirectedRepo, '.git') },
+      { GIT_WORK_TREE: redirectedRepo },
+      { GIT_COMMON_DIR: join(redirectedRepo, '.git') },
+      { GIT_CONFIG: legacyConfig },
+      { GIT_CONFIG_GLOBAL: legacyConfig },
+      { GIT_CONFIG_NOSYSTEM: '1' },
+      { GIT_ATTR_NOSYSTEM: '1' },
+    ];
+
+    for (const gitEnvironment of cases) {
+      const { stdout } = runDoctor(repo, {
+        ...env,
+        ...gitEnvironment,
+        PATH: pathWithoutGitleaks(),
+      });
+      assert.match(stdout, /^hook\s+WARN\s+.*unsafe Git environment/im);
+      assert.doesNotMatch(stdout, /^hook\s+ok/m);
+    }
+  });
+
+  it('rejects a locally configured hooksPath outside repository-owned roots', () => {
+    const sharedHooks = mkdtempSync(join(tmpdir(), 'claude-rca-doctor-local-escape-'));
+    copyFileSync(POST_COMMIT, join(sharedHooks, 'post-commit'));
+    const { repo, env } = makeRepo('claude-rca-doc-local-escape-');
+    writeFileSync(join(repo, '.claude-rca.json'), JSON.stringify({ version: 1 }));
+    git(['config', '--local', 'core.hooksPath', sharedHooks], repo, env);
+
+    const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
+
+    assert.match(stdout, /^hook\s+WARN\s+.*outside.*repository/im);
+    assert.doesNotMatch(stdout, /^hook\s+ok/m);
+  });
+
+  it('does not trust an unrelated post-commit hook that only mentions claude-rca', () => {
+    const { repo, env } = makeRepo('claude-rca-doc-unrelated-hook-');
+    writeFileSync(join(repo, '.claude-rca.json'), JSON.stringify({ version: 1 }));
+    const hooksDir = join(repo, '.git', 'hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    writeFileSync(
+      join(hooksDir, 'post-commit'),
+      '#!/bin/sh\n# claude-rca compatibility is handled elsewhere\n',
+      'utf8',
+    );
+
+    const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
+
+    assert.match(stdout, /^hook\s+WARN\s+.*not a managed RCA hook/im);
+    assert.doesNotMatch(stdout, /^hook\s+ok/m);
+  });
+
+  it('rejects managed post-commit hooks that are symlinked or hard-linked', () => {
+    for (const linkType of ['symlink', 'hardlink']) {
+      const { repo, env } = makeRepo(`claude-rca-doc-${linkType}-hook-`);
+      writeFileSync(join(repo, '.claude-rca.json'), JSON.stringify({ version: 1 }));
+      const hooksDir = join(repo, '.git', 'hooks');
+      const externalRoot = mkdtempSync(join(tmpdir(), `claude-rca-doc-${linkType}-external-`));
+      const externalHook = join(externalRoot, 'post-commit');
+      copyFileSync(POST_COMMIT, externalHook);
+      if (linkType === 'symlink') {
+        try {
+          symlinkSync(externalHook, join(hooksDir, 'post-commit'), 'file');
+        } catch (error) {
+          if (process.platform === 'win32' && error?.code === 'EPERM') continue;
+          throw error;
+        }
+      } else {
+        linkSync(externalHook, join(hooksDir, 'post-commit'));
+      }
+
+      const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
+
+      assert.match(stdout, /^hook\s+WARN\s+.*unsafe managed hook/im);
+      assert.doesNotMatch(stdout, /^hook\s+ok/m);
+    }
+  });
+
+  it('rejects a managed hook reached through a linked hooks directory', () => {
+    const { repo, env } = makeRepo('claude-rca-doc-linked-hooks-dir-');
+    writeFileSync(join(repo, '.claude-rca.json'), JSON.stringify({ version: 1 }));
+    const actualHooks = join(repo, 'actual-hooks');
+    const linkedHooks = join(repo, 'linked-hooks');
+    mkdirSync(actualHooks, { recursive: true });
+    copyFileSync(POST_COMMIT, join(actualHooks, 'post-commit'));
+    symlinkSync(actualHooks, linkedHooks, process.platform === 'win32' ? 'junction' : 'dir');
+    git(['config', '--local', 'core.hooksPath', linkedHooks], repo, env);
+
+    const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
+
+    assert.match(stdout, /^hook\s+WARN\s+.*unsafe hooks directory/im);
+    assert.doesNotMatch(stdout, /^hook\s+ok/m);
   });
 
   it('isolates doctor from an ambient mixed-case legacy GIT_CONFIG', () => {

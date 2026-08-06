@@ -1,23 +1,51 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { runAnalyst } from '../../src/analyst.mjs';
 import {
   installGitleaksStub,
   scannerReceiptMarker,
   scannerRejectPayload,
 } from '../fixtures/gitleaks-test-env.mjs';
 
+const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-analyst-bootstrap-'));
+process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+const { runAnalyst } = await import('../../src/analyst.mjs');
+process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
+
 describe('runAnalyst provider security gate', () => {
+  it('normalizes a relative workspace root before scanner delivery', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rca-analyst-relative-cwd-'));
+    const writtenPath = join(dir, 'RCA-private-name.md');
+    const promptPath = join(dir, 'analyst-prompt.md');
+    const receiptPath = join(dir, 'scanner-receipt.json');
+    writeFileSync(promptPath, `Safe analyst prompt\n${scannerReceiptMarker(receiptPath)}`, 'utf8');
+    writeFileSync(writtenPath, 'RCA document sentinel', 'utf8');
+
+    try {
+      await assert.rejects(
+        () =>
+          runAnalyst({
+            writtenPath,
+            systemPromptPath: promptPath,
+            config: {},
+            cwd: relative(process.cwd(), dir),
+          }),
+        (error) => error.code === 'PROVIDER_ISOLATION_UNAVAILABLE',
+      );
+      assert.ok(readFileSync(receiptPath, 'utf8').includes('Safe analyst prompt'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('scans file contents and refuses isolation while ignoring public bypasses', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'rca-analyst-isolation-'));
     const writtenPath = join(dir, 'RCA-private-name.md');
     const promptPath = join(dir, 'analyst-prompt.md');
     const receiptPath = join(dir, 'scanner-receipt.json');
-    const originalPath = process.env.PATH;
     let injectedScanCalls = 0;
     let injectedSpawnCalls = 0;
     writeFileSync(
@@ -28,7 +56,6 @@ describe('runAnalyst provider security gate', () => {
     writeFileSync(writtenPath, 'RCA document sentinel', 'utf8');
 
     try {
-      process.env.PATH = installGitleaksStub(dir);
       await assert.rejects(
         () =>
           runAnalyst({
@@ -65,7 +92,6 @@ describe('runAnalyst provider security gate', () => {
       assert.strictEqual(scanned.documentContent, 'RCA document sentinel');
       assert.ok(!JSON.stringify(scanned).includes(writtenPath));
     } finally {
-      process.env.PATH = originalPath;
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -74,12 +100,10 @@ describe('runAnalyst provider security gate', () => {
     const dir = mkdtempSync(join(tmpdir(), 'rca-analyst-scan-reject-'));
     const writtenPath = join(dir, 'RCA-private-name.md');
     const promptPath = join(dir, 'analyst-prompt.md');
-    const originalPath = process.env.PATH;
     writeFileSync(promptPath, 'Safe analyst prompt', 'utf8');
     writeFileSync(writtenPath, scannerRejectPayload(), 'utf8');
 
     try {
-      process.env.PATH = installGitleaksStub(dir);
       await assert.rejects(
         () => runAnalyst({ writtenPath, systemPromptPath: promptPath, config: {} }),
         (error) => {
@@ -91,16 +115,13 @@ describe('runAnalyst provider security gate', () => {
         },
       );
     } finally {
-      process.env.PATH = originalPath;
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it('returns a static disk error without scanning when complete input cannot be read', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'rca-analyst-read-'));
-    const originalPath = process.env.PATH;
     try {
-      process.env.PATH = installGitleaksStub(dir);
       await assert.rejects(
         () =>
           runAnalyst({
@@ -123,7 +144,6 @@ describe('runAnalyst provider security gate', () => {
         },
       );
     } finally {
-      process.env.PATH = originalPath;
       rmSync(dir, { recursive: true, force: true });
     }
   });
