@@ -207,6 +207,34 @@ describe('claude adapter — buildGenerateInvocation', () => {
       },
     );
   });
+
+  it('strips top-level $schema before passing to Claude CLI', () => {
+    const schemaStr = JSON.stringify({
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      properties: { title: { type: 'string' } },
+      required: ['title'],
+      additionalProperties: false,
+    });
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'provider-test-'));
+    try {
+      const inv = claude.buildGenerateInvocation({
+        config: {},
+        payload: '{}',
+        schemaStr,
+        workspaceDir,
+      });
+
+      const schemaIdx = inv.argv.indexOf('--json-schema');
+      const schemaArg = inv.argv[schemaIdx + 1];
+      const parsed = JSON.parse(schemaArg);
+      assert.ok(!parsed.$schema, 'Claude invocation payload should not include $schema');
+      assert.strictEqual(parsed.type, 'object');
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
 });
 
 describe('codex adapter — buildGenerateInvocation', () => {

@@ -4,6 +4,19 @@ import { buildProviderEnv } from './shared.mjs';
 export const name = 'claude';
 export const defaultBinary = 'claude';
 
+function stripUnsupportedSchemaMeta(schemaStr) {
+  try {
+    const parsed = JSON.parse(schemaStr);
+    if (parsed && typeof parsed === 'object' && '$schema' in parsed) {
+      delete parsed.$schema;
+      return JSON.stringify(parsed);
+    }
+    return schemaStr;
+  } catch {
+    return schemaStr;
+  }
+}
+
 function extractRca(stdout) {
   let parsed;
   try {
@@ -50,7 +63,7 @@ export function buildGenerateInvocation({ config, payload, schemaStr, workspaceD
     'Produce a Root Cause Analysis as one JSON object conforming to the supplied schema. ' +
     `Use only this inline input:\n${payload}`;
   const argv = claudeBaseArgs();
-  argv.push('--json-schema', schemaStr);
+  argv.push('--json-schema', stripUnsupportedSchemaMeta(schemaStr));
 
   return {
     cmd: defaultBinary,

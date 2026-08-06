@@ -138,6 +138,10 @@ When `auto_generate` is `true`, a failed scanner blocks `fix:` generation so the
 hook emits a warning and does not produce an RCA. Set `auto_generate=false` to
 opt out of automatic generation for that repository.
 
+For the Claude provider, generation strips top-level schema metadata (currently
+`$schema`) before passing schema JSON to `--json-schema` to avoid known
+compatibility issues in some Claude CLI versions.
+
 ## RCA Output
 
 Generated RCA documents are stored as Markdown:
