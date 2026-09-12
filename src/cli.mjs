@@ -720,14 +720,11 @@ export function createProgram() {
       try {
         const cwd = program.opts().cwd || process.cwd();
         const configPath = program.opts().config;
-        const cfg = loadConfig({ cwd, configPath });
 
-        if (opts.get) {
-          const val = getConfigValue(cfg, opts.get);
-          process.stdout.write(
-            (typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val)) + '\n',
-          );
-        } else if (opts.set) {
+        if (opts.set) {
+          // Do NOT loadConfig() here: --set is the command that repairs a broken
+          // config, and loadConfig now hard-fails on an invalid one. setConfigValue
+          // reads and revalidates the file standalone.
           const eqIdx = opts.set.indexOf('=');
           if (eqIdx === -1) {
             process.stderr.write('Usage: config --set key=value\n');
@@ -743,6 +740,15 @@ export function createProgram() {
             : project.path || join(project.root, '.claude-rca.json');
           setConfigValue(targetPath, key, value);
           process.stderr.write(`✓ set ${key}\n`);
+          return;
+        }
+
+        const cfg = loadConfig({ cwd, configPath });
+        if (opts.get) {
+          const val = getConfigValue(cfg, opts.get);
+          process.stdout.write(
+            (typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val)) + '\n',
+          );
         } else {
           // Never print an api_key that loadConfig() merged in from the environment.
           const safe =

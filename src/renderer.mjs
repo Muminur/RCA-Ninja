@@ -66,7 +66,10 @@ function escapeBody(text) {
 // double-quoted scalar (JSON string syntax is valid YAML).
 const YAML_PLAIN_SAFE = /^[A-Za-z0-9][A-Za-z0-9 _./@+-]*$/;
 const YAML_RESERVED = /^(true|false|null|yes|no|on|off|~)$/i;
-const YAML_NUMERIC = /^[-+]?[0-9][0-9._]*$/;
+// Anything YAML would coerce to a number: int, float, and — critically —
+// exponent form. A git short hash like "123e456" is valid hex but parses as a
+// float (1.23e458 -> Infinity), so it must be quoted to stay a string.
+const YAML_NUMERIC = /^[-+]?(\.[0-9][0-9_]*|[0-9][0-9_]*\.?[0-9_]*)([eE][-+]?[0-9]+)?$/;
 
 function yamlScalar(value) {
   const s = String(value);

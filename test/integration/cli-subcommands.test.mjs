@@ -143,6 +143,39 @@ describe('cli subcommands (via createProgram)', () => {
     );
     assert.ok(stderr.includes('set'), 'stderr must confirm the set operation');
   });
+
+  it('config --set repairs a schema-invalid config (does not lock the user out)', async () => {
+    // loadConfig hard-fails on an invalid config, but --set is the command that
+    // fixes it. It must not call loadConfig first.
+    const tmp = mkdtempSync(join(tmpdir(), 'claude-rca-cli-sub-'));
+    const configPath = join(tmp, '.claude-rca.json');
+    writeFileSync(configPath, JSON.stringify({ version: 1, claude: { timeout_ms: '60s' } }));
+
+    const { stderr, exitCode } = await capture(() =>
+      createProgram().parseAsync([
+        'node',
+        'rca',
+        '--cwd',
+        tmp,
+        'config',
+        '--set',
+        'claude.timeout_ms=60000',
+      ]),
+    );
+    assert.ok(stderr.includes('set'), 'stderr must confirm the repair');
+    assert.ok(exitCode === null || exitCode === 0, 'repair must not exit non-zero');
+    assert.strictEqual(JSON.parse(readFileSync(configPath, 'utf8')).claude.timeout_ms, 60000);
+  });
+
+  it('config --get still refuses a schema-invalid config', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'claude-rca-cli-sub-'));
+    writeFileSync(join(tmp, '.claude-rca.json'), JSON.stringify({ version: 1, bogus_key: true }));
+
+    const { exitCode } = await capture(() =>
+      createProgram().parseAsync(['node', 'rca', '--cwd', tmp, 'config', '--get', 'output_dir']),
+    );
+    assert.ok(exitCode !== null && exitCode > 0, 'invalid config must fail for --get');
+  });
 });
 
 function createObsidianFixture() {
