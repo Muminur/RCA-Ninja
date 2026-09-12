@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import matter from 'gray-matter';
+import { parseRca } from './util/frontmatter.mjs';
 import { loadManifest } from './manifest.mjs';
 
 export function findRelatedRcas({ outputDir, filesChanged, title: _title }) {
@@ -23,7 +23,7 @@ export function findRelatedRcas({ outputDir, filesChanged, title: _title }) {
   for (const filePath of mdFiles) {
     try {
       const content = readFileSync(filePath, 'utf8');
-      const { data } = matter(content);
+      const { data } = parseRca(content);
       if (!data.files || !Array.isArray(data.files)) continue;
 
       const sharedFiles = data.files.filter((f) => changedSet.has(f));
@@ -85,7 +85,7 @@ export function readPriorRcasFromDisk({ outputDir, filesChanged, limit = 3 }) {
   for (const entry of top) {
     try {
       const content = readFileSync(entry.path, 'utf8');
-      const { data, content: body } = matter(content);
+      const { data, content: body } = parseRca(content);
       const rawRootCause = extractRootCause(body);
       const root_cause = rawRootCause.slice(0, 500);
       results.push({
@@ -145,7 +145,7 @@ export function readPriorRcasFromManifest({ outputDir, filesChanged, limit = 3 }
       const fullPath = join(outputDir, entry.path);
       try {
         const content = readFileSync(fullPath, 'utf8');
-        const { data, content: body } = matter(content);
+        const { data, content: body } = parseRca(content);
         const extracted = extractRootCause(body).slice(0, 500);
         results.push({
           title: entry.title,

@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, basename, resolve } from 'node:path';
-import matter from 'gray-matter';
+import { parseRca } from './util/frontmatter.mjs';
 import { atomicWrite } from './util/fs.mjs';
 
 function extractSection(body, heading) {
@@ -99,7 +99,7 @@ export async function rebuildManifest(outputDir) {
       } else if (item.name.endsWith('.md') && !item.name.startsWith('_')) {
         try {
           const content = readFileSync(fullPath, 'utf8');
-          const { data, content: body } = matter(content);
+          const { data, content: body } = parseRca(content);
           if (data.title && data.ref) {
             const dateStr = toDateString(data.date);
             entries.push({

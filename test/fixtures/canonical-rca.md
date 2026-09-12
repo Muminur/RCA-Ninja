@@ -7,7 +7,7 @@ files:
   - src/middleware/auth.js
   - src/lib/session.js
 generated_by: claude-rca/0.1.0
-ref: a3f2c1d
+ref: "a3f2c1d"
 schema: claude-rca.rca.v1
 tags: [rca, bugfix, auth, backend]
 ---

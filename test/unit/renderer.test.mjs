@@ -157,6 +157,23 @@ describe('renderer', () => {
     assert.ok(!md.includes('bug_introduced_by'), 'should not include bug_introduced_by when null');
   });
 
+  it('quotes ref so a number-shaped short hash survives a YAML round-trip', () => {
+    for (const hash of ['0012345', '123e456', '0x12345', '1e5', '1234567']) {
+      const md = renderRca(fixture, { ...makeContext(), short_hash: hash });
+      assert.ok(md.includes(`ref: "${hash}"`), `ref ${hash} must be emitted quoted`);
+      assert.strictEqual(matter(md).data.ref, hash, `ref ${hash} must read back as a string`);
+    }
+  });
+
+  it('quotes prior_bugs ids, which embed a short hash', () => {
+    const ctx = {
+      ...makeContext(),
+      prior_bugs: [{ id: 'RCA-2026-01-01-123e456', title: 'Earlier bug', date: '2026-01-01' }],
+    };
+    const md = renderRca(fixture, ctx);
+    assert.ok(md.includes('- id: "RCA-2026-01-01-123e456"'), 'prior_bugs id must be quoted');
+  });
+
   // --- code_changes ---
 
   it('outputs ## Code Changes section when code_changes is non-empty', () => {
@@ -402,7 +419,7 @@ describe('renderer', () => {
       prior_bugs: [{ id: 'RCA-2026-04-20-abc1234', title: 'Auth session fix', date: '2026-04-20' }],
     };
     const md = renderRca(fixture, ctx);
-    assert.ok(md.includes('id: RCA-2026-04-20-abc1234'), 'should include id');
+    assert.ok(md.includes('id: "RCA-2026-04-20-abc1234"'), 'should include id (quoted)');
     assert.ok(md.includes('"Auth session fix"'), 'should include title (quoted)');
     assert.ok(md.includes('date: "2026-04-20"'), 'should include date (quoted)');
   });

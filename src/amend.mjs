@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import matter from 'gray-matter';
+import { parseRca } from './util/frontmatter.mjs';
 import { RcaError } from './errors.mjs';
 import { atomicWrite } from './util/fs.mjs';
 import { buildContext } from './context.mjs';
@@ -73,7 +73,7 @@ export async function amendRca({
 
   // Read frontmatter to get ref and other metadata
   const raw = readFileSync(matched, 'utf8');
-  const { data: frontmatter } = matter(raw);
+  const { data: frontmatter } = parseRca(raw);
 
   const ref = frontmatter.ref || 'HEAD';
 

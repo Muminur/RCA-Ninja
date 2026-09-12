@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import matter from 'gray-matter';
+import { parseRca } from './util/frontmatter.mjs';
 
 /**
  * Walk outputDir recursively for .md files, parse frontmatter via gray-matter,
@@ -37,7 +37,7 @@ export function auditCorpus({ outputDir }) {
       continue;
     }
 
-    const { data } = matter(content);
+    const { data } = parseRca(content);
 
     if (data.auto_filled && Array.isArray(data.auto_filled) && data.auto_filled.length > 0) {
       degraded.push({ path: fullPath, auto_filled: data.auto_filled });

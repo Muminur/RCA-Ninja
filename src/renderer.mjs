@@ -158,7 +158,8 @@ export function renderRca(rca, context) {
     if (key === 'prior_bugs' && Array.isArray(val)) {
       yamlLines.push(`${key}:`);
       for (const item of val) {
-        yamlLines.push(`  - id: ${yamlScalar(item.id)}`);
+        // ids embed a git short hash — always quote, never risk YAML coercion.
+        yamlLines.push(`  - id: ${JSON.stringify(String(item.id))}`);
         yamlLines.push(`    title: ${JSON.stringify(item.title)}`);
         yamlLines.push(`    date: "${item.date}"`);
       }
@@ -171,9 +172,11 @@ export function renderRca(rca, context) {
           yamlLines.push(`  - ${yamlScalar(item)}`);
         }
       }
-    } else if (key === 'description') {
-      // JSON.stringify to handle colons and special characters safely
-      yamlLines.push(`${key}: ${JSON.stringify(val)}`);
+    } else if (key === 'description' || key === 'ref') {
+      // description: colons and special characters. ref: an opaque git short
+      // hash — "0012345", "123e456" and "0x12345" are all read back as numbers
+      // if emitted plain, so quote unconditionally rather than pattern-match.
+      yamlLines.push(`${key}: ${JSON.stringify(String(val))}`);
     } else {
       yamlLines.push(`${key}: ${yamlScalar(val)}`);
     }

@@ -997,6 +997,7 @@ export function createProgram() {
         const { readdirSync: readdir } = await import('node:fs');
         const { validateRca } = await import('./schema.mjs');
         const matter = await import('gray-matter');
+        const { parseRca } = await import('./util/frontmatter.mjs');
 
         const mdFiles = [];
         try {
@@ -1013,7 +1014,9 @@ export function createProgram() {
         const results = { valid: [], invalid: [], fixed: [] };
         for (const filePath of mdFiles) {
           const raw = readFileSync(filePath, 'utf8');
-          const { data } = matter.default(raw);
+          // parseRca, not matter(): --fix rewrites the file, and a YAML-coerced
+          // ref would be written back as a number.
+          const { data } = parseRca(raw);
           const check = validateRca(data);
           if (check.valid) {
             results.valid.push(filePath);
