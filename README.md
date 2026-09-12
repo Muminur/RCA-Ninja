@@ -121,12 +121,27 @@ codex-rca config --set provider=codex
 codex-rca doctor   # verifies the configured provider's binary is installed
 ```
 
-If both providers are configured, generation automatically **falls back** to the other when the primary fails (e.g. Claude → Codex). Search, recent/show/trends, hooks, and MCP work identically regardless of provider.
+If both providers are installed, generation **falls back** to the other when the
+configured one cannot run — not installed, logged out, or rate limited. Those
+three are distinguished from "the model answered badly", which is retried on the
+same provider instead, and only after extraction has already failed, so an RCA
+that legitimately discusses a rate limit is never mistaken for a quota error.
+
+When no provider can run, generation fails with `PROVIDER_UNAVAILABLE`, naming
+each one and why:
+
+```text
+No usable LLM provider: claude (not logged in), codex (usage limited).
+Log in (claude /login, codex login) and retry.
+```
+
+Search, recent/show/trends, hooks, and MCP work identically regardless of provider.
 
 ## Security & Configuration
 
 - **Secrets live in `.env`, not config.** Put `OBSIDIAN_API_KEY` in a gitignored `.env` beside your `.claude-rca.json`; it is loaded automatically. `config --set obsidian.api_key` is refused, and a plain `config` dump redacts the key.
 - **Read-only generation.** The provider is invoked with `allowed_tools: "Read"` (the RCA prompt needs nothing more) and `permission_mode: plan`.
+- **Providers run in a throwaway workspace.** Every invocation gets a fresh temporary directory as its cwd and as `TEMP`/`TMP`/`TMPDIR`/`APPDATA`/`LOCALAPPDATA`, and that directory is deleted afterwards. No API key, token, or repository variable is passed through, and nothing but the scanned payload reaches the process. The one documented exception is `HOME`/`USERPROFILE`: both CLIs keep their login there, so redirecting it does not sandbox the provider, it logs it out. See `CREDENTIAL_ENV_KEYS` in `src/providers/shared.mjs`. `codex-rca doctor` verifies this rather than asserting it.
 - **Search is injection-safe.** The search query is bound as a ripgrep pattern with `-e … --`, so a query starting with `-` can never be interpreted as a ripgrep option (notably `--pre`, which would execute a program).
 - **MCP paths are contained.** `rca_show` and `rca_sync_to_vault` confine caller-supplied paths to `output_dir`, since MCP arguments come from a model. The equivalent CLI commands stay unrestricted.
 - **Config is discovered upward.** Running from a subdirectory finds the project's `.claude-rca.json` by walking up to the git repo root — and, from a linked worktree, falls back to the main checkout. `output_dir` resolves against the directory that owns the config. Invalid config fails fast rather than being silently used.
@@ -313,19 +328,16 @@ hook exists at the **effective** hooks directory (honouring `core.hooksPath`),
 and whether `auto_generate` is on:
 
 ```text
-config          ok    /path/to/repo/.claude-rca.json
-hook            ok    /path/to/repo/.git/hooks/post-commit
-secret-scanner  ok    gitleaks 8.30.1
-auto-gen        WARN  disabled — scanner, local hook, and provider isolation are required
+config              ok    /path/to/repo/.claude-rca.json
+hook                ok    /path/to/repo/.git/hooks/post-commit
+secret-scanner      ok    gitleaks 8.30.1
+provider-isolation  ok    workspace-isolated (12 env vars, scratch dirs redirected, no API keys)
+auto-gen            ok    true — triggering commits generate RCAs automatically
 ```
 
-> **Provider execution is currently fail-closed.** `generate` scans its payload
-> and then refuses with `PROVIDER_ISOLATION_UNAVAILABLE`, because no approved
-> isolated provider broker ships yet. Everything up to the provider call —
-> trigger selection, context extraction, blame attribution, secret scanning,
-> dedup, the corpus, search, MCP — works; the provider call itself does not, and
-> `setup` sets `auto_generate=false` accordingly. `codex-rca doctor` reports
-> this rather than hiding it.
+`auto-gen` only reports `ok` when the scanner, the local hook, and provider
+isolation all hold; otherwise it names the ones that do not, so a dead pipeline
+cannot report a clean bill of health.
 
 ## Project Layout
 
