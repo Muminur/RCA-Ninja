@@ -108,6 +108,18 @@ const CONFIG_SCHEMA = {
       },
       additionalProperties: false,
     },
+    triggers: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        commit_types: {
+          type: 'array',
+          items: { type: 'string' },
+          default: ['fix'],
+        },
+        closes_issue: { type: 'boolean', default: true },
+      },
+    },
     token_budget: {
       type: 'object',
       properties: {
@@ -172,6 +184,21 @@ function collectKeys(schema, prefix = '') {
   }
 }
 collectKeys(CONFIG_SCHEMA);
+
+/**
+ * Walk CONFIG_SCHEMA to the node a dotted key path names, so callers can ask
+ * what type a setting expects. Returns null for an unknown path.
+ * @param {string} keyPath
+ * @returns {object|null}
+ */
+export function schemaNodeFor(keyPath) {
+  let node = CONFIG_SCHEMA;
+  for (const part of keyPath.split('.')) {
+    if (!node || !node.properties || !node.properties[part]) return null;
+    node = node.properties[part];
+  }
+  return node;
+}
 
 // Only generation validates an RCA, so neither the schema file read nor its
 // compilation belongs on the module-load path.

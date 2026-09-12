@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
-import { validateConfig, VALID_KEYS } from './schema.mjs';
+import { validateConfig, VALID_KEYS, schemaNodeFor } from './schema.mjs';
 import { RcaError } from './errors.mjs';
 
 /**
@@ -190,8 +190,17 @@ export function setConfigValue(configPath, keyPath, rawValue) {
     obj = obj[p];
   }
 
+  // Coerce the string the CLI hands us into whatever the schema expects, so
+  // `--set triggers.commit_types=fix,feat` writes an array rather than a string
+  // that validation would then reject.
+  const node = schemaNodeFor(keyPath);
   let value = rawValue;
-  if (rawValue === 'true') value = true;
+  if (node?.type === 'array') {
+    value = rawValue
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+  } else if (rawValue === 'true') value = true;
   else if (rawValue === 'false') value = false;
   else if (/^\d+$/.test(rawValue)) value = parseInt(rawValue, 10);
 

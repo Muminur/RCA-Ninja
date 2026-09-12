@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# codex-rca / claude-rca post-commit hook — generates an RCA when the commit
-# message starts with "fix:" (Conventional Commits) and the user has
-# enabled auto_generate in config.
+# codex-rca / claude-rca post-commit hook — asks the RCA CLI to analyse the
+# commit that was just created.
+#
+# The hook no longer decides what counts as an RCA-worthy commit. That lived
+# here as a `case` on the subject line and again in the CLI, and the two could
+# drift; worse, a subject-only match skips `feat:` commits whose body closes a
+# reported issue. `generate --if-triggered` now owns the decision and honours
+# the `triggers` config block (default: `fix:` plus any closing keyword).
 
 set -eu
 
@@ -11,7 +16,6 @@ mkdir -p "${LOG_DIR}" 2>/dev/null || LOG_DIR="${TMPDIR:-/tmp}"
 LOG_FILE="${LOG_DIR}/hook.log"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%s)"
 REF="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-MSG="$(git log -1 --pretty=%s 2>/dev/null || echo unknown)"
 
 log() {
   echo "[${TIMESTAMP}] [${1}] ref=${REF} ${2}" >> "${LOG_FILE}" 2>/dev/null || true
@@ -38,29 +42,23 @@ if ! "${RCA_BIN}" config --get auto_generate 2>/dev/null | grep -qx true; then
   exit 0
 fi
 
-case "$MSG" in
-  fix:*|fix\(*\):*)
-    log "INFO" "fix commit detected, starting RCA generation"
-    # Run in background so commit returns immediately.
-    (
-      GEN_LOG="$("${RCA_BIN}" config --get log.file 2>/dev/null || echo "${LOG_FILE}")"
-      OUTPUT_DIR="$("${RCA_BIN}" config --get output_dir 2>/dev/null || echo rca)"
-      if "${RCA_BIN}" generate --from HEAD >>"${GEN_LOG}" 2>&1; then
-        log "INFO" "RCA generated successfully"
-        rm -f "${OUTPUT_DIR}/.last-rca-error"
-      else
-        LAST_LINE="$(tail -1 "${GEN_LOG}" 2>/dev/null || echo 'unknown error')"
-        ERROR_MSG="$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" -- "${LAST_LINE}" 2>/dev/null || echo "\"${LAST_LINE}\"")"
-        log "ERROR" "generation failed: ${LAST_LINE}"
-        printf '{"timestamp":"%s","ref":"%s","error":%s}\n' \
-          "${TIMESTAMP}" "${REF}" "${ERROR_MSG}" \
-          >"${OUTPUT_DIR}/.last-rca-error" 2>/dev/null || true
-      fi
-    ) &
-    disown 2>/dev/null || true
-    ;;
-  *)
-    log "INFO" "skipped: commit message does not start with fix:"
-    exit 0
-    ;;
-esac
+log "INFO" "delegating to ${RCA_BIN} generate --if-triggered"
+
+# Run in background so the commit returns immediately. --if-triggered exits
+# quietly (and skipped) when the commit is not one the config asks for.
+(
+  GEN_LOG="$("${RCA_BIN}" config --get log.file 2>/dev/null || echo "${LOG_FILE}")"
+  OUTPUT_DIR="$("${RCA_BIN}" config --get output_dir 2>/dev/null || echo rca)"
+  if "${RCA_BIN}" generate --from HEAD --if-triggered >>"${GEN_LOG}" 2>&1; then
+    log "INFO" "generate --if-triggered finished"
+    rm -f "${OUTPUT_DIR}/.last-rca-error"
+  else
+    LAST_LINE="$(tail -1 "${GEN_LOG}" 2>/dev/null || echo 'unknown error')"
+    ERROR_MSG="$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" -- "${LAST_LINE}" 2>/dev/null || echo "\"${LAST_LINE}\"")"
+    log "ERROR" "generation failed: ${LAST_LINE}"
+    printf '{"timestamp":"%s","ref":"%s","error":%s}\n' \
+      "${TIMESTAMP}" "${REF}" "${ERROR_MSG}" \
+      >"${OUTPUT_DIR}/.last-rca-error" 2>/dev/null || true
+  fi
+) &
+disown 2>/dev/null || true

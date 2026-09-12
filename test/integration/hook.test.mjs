@@ -18,6 +18,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const INSTALL_HOOK = join(ROOT, 'hooks', 'install-hook.sh');
 const POST_COMMIT = join(ROOT, 'hooks', 'post-commit');
+const POST_MERGE = join(ROOT, 'hooks', 'post-merge');
+const INSTALL_HOOK_MJS = join(ROOT, 'hooks', 'install-hook.mjs');
 
 function git(args, cwd, env = {}) {
   return execFileSync('git', args, {
@@ -60,9 +62,13 @@ describe('hooks', () => {
     assert.ok(src.length > 100, 'install-hook.sh must not be a stub');
   });
 
-  it('post-commit hook checks for fix: prefix', () => {
+  it('post-commit hook delegates the trigger decision to the CLI', () => {
     const src = readFileSync(POST_COMMIT, 'utf8');
-    assert.ok(src.includes('fix:'), 'hook must check for fix: prefix');
+    assert.ok(src.includes('--if-triggered'), 'hook must call generate --if-triggered');
+    assert.ok(
+      !/^\s*case "\$MSG"/m.test(src),
+      'hook must not carry its own subject-matching case statement',
+    );
   });
 
   it('post-commit hook runs claude-rca in background (nohup or &)', () => {
@@ -142,6 +148,49 @@ describe('hooks', () => {
     assert.ok(
       src.includes('bash') && (src.includes('--version') || src.includes('BASH_VERSION')),
       'install-hook.sh must verify bash is available',
+    );
+  });
+
+  it('post-merge hook exists and has a bash shebang', () => {
+    assert.ok(existsSync(POST_MERGE), 'hooks/post-merge must exist');
+    const src = readFileSync(POST_MERGE, 'utf8');
+    assert.ok(src.startsWith('#!/usr/bin/env bash'), 'post-merge must have a bash shebang');
+  });
+
+  it('post-merge hook generates across the range the merge introduced', () => {
+    const src = readFileSync(POST_MERGE, 'utf8');
+    assert.ok(src.includes('ORIG_HEAD'), 'post-merge must anchor the range at ORIG_HEAD');
+    assert.ok(src.includes('--since'), 'post-merge must call generate --since');
+    assert.ok(src.includes('--max'), 'post-merge must cap how many commits one run processes');
+  });
+
+  it('post-merge hook bails silently when claude-rca is not on PATH', () => {
+    const src = readFileSync(POST_MERGE, 'utf8');
+    assert.ok(src.includes('not found'), 'post-merge must log a not-found message');
+    assert.ok(src.includes('exit 0'), 'post-merge must never fail the merge');
+  });
+
+  it('both installers install the post-merge hook', () => {
+    assert.ok(
+      readFileSync(INSTALL_HOOK_MJS, 'utf8').includes("'post-merge'"),
+      'install-hook.mjs HOOKS must list post-merge',
+    );
+    assert.ok(
+      readFileSync(INSTALL_HOOK, 'utf8').includes('post-merge'),
+      'install-hook.sh must install post-merge',
+    );
+  });
+
+  it('install-hook.mjs installs post-merge into a real repo', () => {
+    execFileSync(process.execPath, [INSTALL_HOOK_MJS, tmp], {
+      cwd: tmp,
+      encoding: 'utf8',
+      timeout: 60000,
+      env: { ...process.env, HOME: tmp },
+    });
+    assert.ok(
+      existsSync(join(tmp, '.git', 'hooks', 'post-merge')),
+      'post-merge must land in .git/hooks',
     );
   });
 

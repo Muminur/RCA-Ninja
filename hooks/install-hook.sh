@@ -34,6 +34,7 @@ install_one() {
 }
 
 install_one "post-commit"
+install_one "post-merge"
 install_one "commit-msg"
 
 # Attempt npm link so claude-rca is on PATH globally

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const SRC_DIR = dirname(__filename);
 const REPO_DIR = resolve(SRC_DIR, '..');
-const HOOKS = ['post-commit', 'commit-msg'];
+const HOOKS = ['post-commit', 'post-merge', 'commit-msg'];
 const MARKER = 'claude-rca';
 
 function getHookDir(cwd) {

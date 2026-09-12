@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# codex-rca / claude-rca post-merge hook — analyses the commits a merge or pull
+# just brought in.
+#
+# Why this exists: post-commit only ever sees commits created locally. When the
+# project merges through GitHub, every merge is a squash merge performed on the
+# server, so the commit that actually lands on the default branch never passes
+# through a local hook — and the branch commits it replaced are deleted, taking
+# the only refs the earlier RCAs pointed at with them. This hook runs when that
+# squash commit arrives locally (git pull / git merge) and generates against it.
+#
+# ORIG_HEAD is where the branch was before the merge, so ORIG_HEAD..HEAD is
+# exactly what the merge introduced. `generate --since` skips commits that
+# already have an RCA, so a replayed range costs nothing.
+
+set -eu
+
+LOG_DIR="${HOME}/.claude-rca"
+mkdir -p "${LOG_DIR}" 2>/dev/null || LOG_DIR="${TMPDIR:-/tmp}"
+LOG_FILE="${LOG_DIR}/hook.log"
+TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%s)"
+REF="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+log() {
+  echo "[${TIMESTAMP}] [${1}] ref=${REF} ${2}" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+RCA_BIN="${RCA_BIN:-}"
+if [ -z "${RCA_BIN}" ]; then
+  if command -v codex-rca >/dev/null 2>&1; then
+    RCA_BIN="codex-rca"
+  else
+    RCA_BIN="claude-rca"
+  fi
+fi
+
+if ! command -v "${RCA_BIN}" >/dev/null 2>&1; then
+  log "ERROR" "${RCA_BIN} not found on PATH — run 'npm link' in the codex-rca repo"
+  exit 0
+fi
+
+if ! "${RCA_BIN}" config --get auto_generate 2>/dev/null | grep -qx true; then
+  log "INFO" "skipped: auto_generate is not true"
+  exit 0
+fi
+
+# ORIG_HEAD is unset on a repo's very first merge; HEAD~1 still covers the
+# single commit a fast-forward brought in. Resolve to a SHA here rather than
+# passing the name along: generation runs in the background, and the next git
+# operation would move ORIG_HEAD out from under it.
+SINCE="$(git rev-parse --verify --quiet ORIG_HEAD 2>/dev/null || true)"
+if [ -z "${SINCE}" ]; then
+  SINCE="$(git rev-parse --verify --quiet 'HEAD~1' 2>/dev/null || true)"
+fi
+if [ -z "${SINCE}" ]; then
+  log "INFO" "skipped: no ORIG_HEAD and no parent commit"
+  exit 0
+fi
+
+# --max bounds a first pull after install, which could otherwise queue dozens
+# of provider calls in one go. Re-running the hook picks up the remainder.
+MAX_COMMITS="${RCA_POST_MERGE_MAX:-10}"
+
+log "INFO" "merge detected, generating RCAs for ${SINCE}..HEAD"
+
+(
+  GEN_LOG="$("${RCA_BIN}" config --get log.file 2>/dev/null || echo "${LOG_FILE}")"
+  OUTPUT_DIR="$("${RCA_BIN}" config --get output_dir 2>/dev/null || echo rca)"
+  if "${RCA_BIN}" generate --since "${SINCE}" --max "${MAX_COMMITS}" >>"${GEN_LOG}" 2>&1; then
+    log "INFO" "post-merge generation finished"
+    rm -f "${OUTPUT_DIR}/.last-rca-error"
+  else
+    LAST_LINE="$(tail -1 "${GEN_LOG}" 2>/dev/null || echo 'unknown error')"
+    ERROR_MSG="$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" -- "${LAST_LINE}" 2>/dev/null || echo "\"${LAST_LINE}\"")"
+    log "ERROR" "post-merge generation failed: ${LAST_LINE}"
+    printf '{"timestamp":"%s","ref":"%s","error":%s}\n' \
+      "${TIMESTAMP}" "${REF}" "${ERROR_MSG}" \
+      >"${OUTPUT_DIR}/.last-rca-error" 2>/dev/null || true
+  fi
+) &
+disown 2>/dev/null || true

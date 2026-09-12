@@ -170,3 +170,35 @@ export function loadManifest(outputDir) {
   }
   return entries;
 }
+
+// RCA-YYYY-MM-DD-<shorthash>-<slug>.md — writeRca() always embeds the hash.
+const RCA_FILENAME_REF = /^RCA-\d{4}-\d{2}-\d{2}-([0-9a-f]+)-/;
+
+/**
+ * Short hashes of every commit that already has an RCA in `outputDir`.
+ *
+ * Reads the manifest and the filenames: a corpus whose manifest is missing,
+ * stale, or gitignored would otherwise look empty and get regenerated.
+ *
+ * @param {string} outputDir
+ * @returns {Set<string>}
+ */
+export function existingRefs(outputDir) {
+  const refs = new Set();
+
+  for (const entry of loadManifest(outputDir)) {
+    if (entry.ref) refs.add(String(entry.ref).slice(0, 7));
+  }
+
+  try {
+    for (const entry of readdirSync(outputDir, { recursive: true })) {
+      if (typeof entry !== 'string') continue;
+      const match = RCA_FILENAME_REF.exec(basename(entry));
+      if (match) refs.add(match[1].slice(0, 7));
+    }
+  } catch {
+    // No corpus directory yet.
+  }
+
+  return refs;
+}

@@ -14,6 +14,8 @@ import {
 } from './config.mjs';
 import { RcaError } from './errors.mjs';
 import { buildContext } from './context.mjs';
+import { isTriggeringCommit } from './triggers.mjs';
+import * as git from './util/git.mjs';
 import { generate, scanForSecrets } from './generator.mjs';
 import { renderRca } from './renderer.mjs';
 import { writeRca, computeRcaPath } from './writer.mjs';
@@ -305,7 +307,12 @@ export function createProgram() {
     .command('generate')
     .description('Generate an RCA for a commit')
     .option('--from <ref>', 'Git ref to analyze', 'HEAD')
-    .option('--since <ref>', 'Batch-generate RCAs for all fix: commits since <ref>')
+    .option('--since <ref>', 'Batch-generate RCAs for every triggering commit since <ref>')
+    .option('--max <n>', 'Cap how many commits --since processes in one run', '10')
+    .option(
+      '--if-triggered',
+      'Exit quietly unless the commit matches triggers.commit_types or closes an issue',
+    )
     .option('--message <msg>', 'Override commit message')
     .option('--logs <file>', 'Attach log file')
     .option('--dry-run', 'Print what would be generated without writing')
@@ -324,15 +331,35 @@ export function createProgram() {
         const configPath = program.opts().config;
         const cfg = loadConfig({ cwd, configPath });
 
-        // --since: batch mode for historical fix commits
+        // --since: batch mode for historical commits
         if (opts.since) {
           const { getFixCommits } = await import('./context.mjs');
-          const fixCommits = await getFixCommits({ cwd, since: opts.since });
+          const fixCommits = await getFixCommits({ cwd, since: opts.since, config: cfg });
           if (fixCommits.length === 0) {
             process.stderr.write('No fix: commits found in range.\n');
             return;
           }
-          process.stderr.write(`Found ${fixCommits.length} fix commit(s) to process.\n`);
+          const { existingRefs } = await import('./manifest.mjs');
+          const alreadyAnalysed = existingRefs(cfg.output_dir);
+          // A post-merge run replays the same range whenever a pull brings in
+          // nothing new, so skip commits that already have an RCA.
+          const pending = fixCommits.filter(({ hash }) => !alreadyAnalysed.has(hash.slice(0, 7)));
+          const maxCommits = Math.max(1, parseInt(opts.max, 10) || 10);
+          const deferred = Math.max(0, pending.length - maxCommits);
+          const selected = pending.slice(0, maxCommits);
+
+          if (selected.length === 0) {
+            process.stderr.write(
+              `Nothing new to analyse: ${fixCommits.length} triggering commit(s), all already have an RCA.\n`,
+            );
+            return;
+          }
+          process.stderr.write(`Found ${selected.length} commit(s) to process.\n`);
+          if (deferred > 0) {
+            process.stderr.write(
+              `  (${deferred} more deferred by --max ${maxCommits}; re-run to continue)\n`,
+            );
+          }
           const defaultSystemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
           const defaultSchemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
           const { schemaPath, systemPromptPath } = resolveTemplatePaths(
@@ -340,10 +367,16 @@ export function createProgram() {
             defaultSchemaPath,
             defaultSystemPromptPath,
           );
-          for (const { hash, subject } of fixCommits) {
+          for (const { hash, subject } of selected) {
             process.stderr.write(`  Processing ${hash.slice(0, 7)}: ${subject}\n`);
             try {
               const context = await buildContext({ cwd, ref: hash });
+              // The single-ref path scans for secrets; this is now the automated
+              // post-merge path, so it has to scan too.
+              if (opts.secretScan !== false && scanForSecrets(context.diff)) {
+                process.stderr.write('    x skipped (secret detected in diff)\n');
+                continue;
+              }
               const priorRcas = readPriorRcas({
                 outputDir: cfg.output_dir,
                 filesChanged: context.files_changed,
@@ -380,6 +413,16 @@ export function createProgram() {
             }
           }
           return;
+        }
+
+        if (opts.ifTriggered) {
+          const message = await git.commitMessage(opts.from, cwd).catch(() => '');
+          if (!isTriggeringCommit({ message, config: cfg })) {
+            process.stderr.write(
+              `Skipped ${opts.from}: not an RCA trigger (see triggers.commit_types).\n`,
+            );
+            return;
+          }
         }
 
         progress.start('Extracting context');

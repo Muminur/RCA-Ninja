@@ -1,6 +1,7 @@
 import * as git from './util/git.mjs';
 import { run } from './util/exec.mjs';
 import { RcaError } from './errors.mjs';
+import { isTriggeringCommit } from './triggers.mjs';
 
 const MAX_DIFF_BYTES = 200 * 1024;
 
@@ -549,29 +550,36 @@ export async function buildContext({
 }
 
 /**
- * Return all commits in the range since..HEAD whose subject starts with
- * `fix:` or `fix(...)` (Conventional Commits). No Claude round-trip.
- * @param {{ cwd: string, since: string }} opts
- * @returns {Promise<Array<{ hash: string, subject: string }>>}
+ * Return the commits in `since..HEAD` that should get an RCA, newest first, as
+ * decided by isTriggeringCommit(). No provider round-trip.
+ *
+ * The name predates the configurable trigger; it still covers `fix:` by
+ * default, plus whatever `triggers.commit_types` adds and any commit whose
+ * body closes a reported issue.
+ *
+ * @param {{ cwd: string, since: string, config?: object|null }} opts
+ * @returns {Promise<Array<{ hash: string, subject: string, message: string }>>}
  */
-export async function getFixCommits({ cwd, since }) {
+export async function getFixCommits({ cwd, since, config = null }) {
   let stdout;
   try {
-    ({ stdout } = await run('git', ['log', `${since}..HEAD`, '--format=%H %s'], { cwd }));
+    // %B, not %s: closing keywords live in the body, and GitHub's squash-merge
+    // default puts the PR description there. \x1f separates hash from message,
+    // \x1e separates records, so multi-line bodies survive parsing.
+    ({ stdout } = await run('git', ['log', `${since}..HEAD`, '--format=%H%x1f%B%x1e'], { cwd }));
   } catch {
     return [];
   }
 
   const commits = [];
-  for (const line of stdout.trim().split('\n')) {
-    if (!line.trim()) continue;
-    const spaceIdx = line.indexOf(' ');
-    if (spaceIdx === -1) continue;
-    const hash = line.slice(0, spaceIdx);
-    const subject = line.slice(spaceIdx + 1);
-    if (/^fix[:(]/.test(subject)) {
-      commits.push({ hash, subject });
-    }
+  for (const record of stdout.split('\x1e')) {
+    const sepIdx = record.indexOf('\x1f');
+    if (sepIdx === -1) continue;
+    const hash = record.slice(0, sepIdx).trim();
+    const message = record.slice(sepIdx + 1).trim();
+    if (!hash || !message) continue;
+    if (!isTriggeringCommit({ message, config })) continue;
+    commits.push({ hash, subject: message.split('\n')[0].trim(), message });
   }
   return commits;
 }
