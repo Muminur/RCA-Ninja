@@ -4,7 +4,7 @@ This file helps AI assistants such as Codex, Claude, Cursor, and other coding ag
 
 ## Project Overview
 
-`codex-rca` is a local-first root cause analysis (RCA) CLI. It turns bug-fix commits into structured, searchable Markdown postmortems and exposes RCA lookup tools through CLI commands and MCP.
+`codex-rca` is a local-first root cause analysis (RCA) CLI. It turns the commits that its `triggers` config matches — bug fixes by default, plus any commit whose body closes an issue — into structured, searchable Markdown postmortems, and exposes RCA lookup tools through CLI commands and MCP.
 
 `claude-rca` remains a backward-compatible command alias. The config file remains `.claude-rca.json` so existing installations and RCA corpora keep working.
 
@@ -23,6 +23,11 @@ rca/2026/04/RCA-2026-04-25-a3f2c1d-session-null-pointer.md
 ```
 
 Each file has YAML frontmatter with stable fields such as `title`, `date`, `ref`, `branch`, `confidence`, `files`, `tags`, `schema`, and `generated_by`.
+
+`ref` is always a **quoted** string (`ref: "a3f2c1d"`). Parse it as text, never as
+a number: unquoted, YAML reads `0012345` as octal `5349` and `123e456` as
+`Infinity`. `bug_introduced_by`, when present, names the commit that wrote the
+lines the fix deleted, decided by a blame vote over those lines.
 
 ## Manifest And AI Index
 
@@ -94,7 +99,12 @@ args = ["--cwd", "/path/to/repo", "mcp-server"]
 codex-rca init
 codex-rca setup
 codex-rca generate --from HEAD
+codex-rca generate --from HEAD --if-triggered   # no-op unless the trigger config matches
+codex-rca generate --since <ref> [--max <n>]    # batch; skips commits that already have an RCA
 codex-rca generate --dry-run
+codex-rca amend <id> --hint "..."
+codex-rca rebuild [--fix] [--json]
+codex-rca config --get <key> | --set <key=value> | --path
 codex-rca search <query> [--tag <tag>] [--since <date>] [--json]
 codex-rca recent [N]
 codex-rca show <id|path>
@@ -124,4 +134,6 @@ docs/                   # PRD, architecture, troubleshooting
 3. Use `codex-rca show <id>` only after narrowing down the relevant RCA.
 4. Do not rewrite the RCA schema unless the user explicitly asks for a schema migration.
 5. Do not modify `.obsidian/` files directly. Use the CLI sync commands.
-6. Treat generated RCA files as engineering records. Preserve dates, refs, confidence, and file lists unless correcting a known mistake.
+6. Treat generated RCA files as engineering records. Preserve dates, refs, confidence, and file lists unless correcting a known mistake. When hand-editing frontmatter, keep `ref` quoted — unquoting it lets YAML coerce a hash into a number.
+7. RCAs also arrive through the `post-merge` hook, over `ORIG_HEAD..HEAD`. A squash-merged PR therefore has an RCA against the squash commit on the default branch, not against the branch commits it replaced — those no longer exist.
+8. What counts as RCA-worthy is `triggers.commit_types` (default `["fix"]`) plus `triggers.closes_issue` (default true, matching `Closes #12` anywhere in the message). Do not re-implement that rule; call `generate --if-triggered` and let the CLI decide.
