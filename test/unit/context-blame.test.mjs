@@ -1,6 +1,6 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -134,6 +134,64 @@ describe('getBugIntroducedBy', () => {
       const result = await getBugIntroducedBy(['newfile.js'], singleCommitDir);
       // If there is only one commit, the file was added (not modified before), so result is null
       assert.strictEqual(result, null);
+    });
+  });
+
+  describe('with a fix that touches an unrelated file first in path order', () => {
+    let voteDir;
+    let introHash;
+    let readmeHash;
+
+    before(async () => {
+      voteDir = await mkdtemp(join(tmpdir(), 'rca-blame-vote-'));
+      git(['init', '-b', 'main'], voteDir);
+      git(['config', 'user.email', 'test@example.com'], voteDir);
+      git(['config', 'user.name', 'Test Author'], voteDir);
+      await mkdir(join(voteDir, 'src'), { recursive: true });
+
+      // A: introduces the defect.
+      await writeFile(join(voteDir, 'src', 'app.js'), 'export function f() {\n  return null;\n}\n');
+      git(['add', '.'], voteDir);
+      git(['commit', '-m', 'feat: add app with bug'], voteDir);
+      introHash = git(['rev-parse', '--short=7', 'HEAD'], voteDir);
+
+      // B: touches README only. Sorts before src/ in git's path order, so the
+      // old first-file-wins heuristic returned this commit.
+      await writeFile(join(voteDir, 'README.md'), '# Project\n');
+      git(['add', '.'], voteDir);
+      git(['commit', '-m', 'docs: add readme'], voteDir);
+      readmeHash = git(['rev-parse', '--short=7', 'HEAD'], voteDir);
+
+      // C: the fix. Deletes a line in src/app.js, only appends to README.
+      await writeFile(join(voteDir, 'src', 'app.js'), 'export function f() {\n  return 42;\n}\n');
+      await writeFile(join(voteDir, 'README.md'), '# Project\n\nNotes.\n');
+      git(['add', '.'], voteDir);
+      git(['commit', '-m', 'fix: return the right value'], voteDir);
+    });
+
+    after(async () => {
+      await rm(voteDir, { recursive: true, force: true });
+    });
+
+    it('blames the commit that wrote the deleted line, not the last README touch', async () => {
+      const diff = git(['diff', 'HEAD~1..HEAD'], voteDir);
+      const files = git(['diff', '--name-only', 'HEAD~1..HEAD'], voteDir)
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      assert.strictEqual(files[0], 'README.md', 'README must sort first for this test to bite');
+
+      const result = await getBugIntroducedBy(files, voteDir, 'HEAD', diff);
+      assert.ok(result !== null, 'should attribute the defect');
+      assert.strictEqual(result.commit, introHash);
+      assert.notStrictEqual(result.commit, readmeHash);
+    });
+
+    it('buildContext wires the diff through, so the same attribution lands in context', async () => {
+      const { buildContext } = await import('../../src/context.mjs');
+      const ctx = await buildContext({ cwd: voteDir, ref: 'HEAD' });
+      assert.ok(ctx.bug_introduced_by !== null);
+      assert.strictEqual(ctx.bug_introduced_by.commit, introHash);
     });
   });
 
