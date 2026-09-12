@@ -37,11 +37,11 @@ describe('doctor', () => {
   });
 
   it(
-    'exits unhealthy when tools are present but provider isolation is unavailable',
+    'reports provider isolation as healthy once every tool is present',
     { skip: !ALL_TOOLS_AVAILABLE ? 'not all tools on PATH' : false },
     () => {
-      const { status } = runDoctor();
-      assert.strictEqual(status, 70);
+      const { stdout } = runDoctor();
+      assert.match(stdout, /^provider-isolation\s+ok\s+workspace-isolated/m);
     },
   );
 

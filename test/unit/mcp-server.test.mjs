@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RcaError } from '../../src/errors.mjs';
 import { installGitleaksStub, scannerRejectPayload } from '../fixtures/gitleaks-test-env.mjs';
+import { pathWithoutProviders, NO_PROVIDER_MESSAGE } from '../fixtures/provider-test-env.mjs';
 
 const EXIT_SENTINEL = Symbol('mock-exit');
 const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-mcp-bootstrap-'));
-process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+process.env.PATH = pathWithoutProviders(installGitleaksStub(scannerBootstrapDir));
 const { createProgram } = await import('../../src/cli.mjs');
 // Imported dynamically, after the stub is on PATH: a static import would load
 // the scanner before installGitleaksStub() runs.
@@ -125,10 +126,9 @@ describe('mcp-server module', () => {
 
       const text = result.content.map((entry) => entry.text).join('\n');
       assert.strictEqual(result.isError, true);
-      assert.strictEqual(
-        text,
-        'Error: No approved isolated provider broker is available; provider execution was refused.',
-      );
+      // The injected generator is ignored, so the real broker runs; with no
+      // provider on PATH it reports which ones are out, and nothing more.
+      assert.strictEqual(text, `Error: ${NO_PROVIDER_MESSAGE}`);
       assert.strictEqual(injectedCalls, 0);
       assert.doesNotMatch(text, /private injected generator diagnostic/i);
     } finally {

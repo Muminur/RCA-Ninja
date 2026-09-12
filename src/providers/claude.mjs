@@ -45,7 +45,12 @@ function extractRca(stdout) {
 
 function claudeBaseArgs() {
   return [
-    '--bare',
+    // --bare is deliberately absent. Measured on a logged-in machine: every
+    // invocation carrying it returned duration_api_ms: 0 and "Not logged in ·
+    // Please run /login", isolated or not, while the same invocation without it
+    // authenticated normally. Why the flag loses the credentials was not
+    // established. --safe-mode already disables customizations, which is what
+    // --bare was here for. claude.use_bare is therefore ignored.
     '--safe-mode',
     '--tools',
     '',

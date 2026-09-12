@@ -9,6 +9,21 @@ import { RcaError } from '../errors.mjs';
 
 const STARTUP_ENV_KEYS = ['PATH', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT'];
 
+// The one concession in the isolation, and the reason it exists:
+//
+// Both CLIs keep their login under the user's real home (Claude in
+// ~/.claude/.credentials.json, Codex in ~/.codex/). Redirecting HOME and
+// USERPROFILE at a throwaway directory therefore does not sandbox the provider,
+// it logs it out — measured: every such invocation came back
+// duration_api_ms: 0, "Not logged in · Please run /login". That is what left
+// generation fail-closed with PROVIDER_ISOLATION_UNAVAILABLE.
+//
+// So HOME and USERPROFILE pass through, and nothing else does. The provider
+// still runs with cwd, TEMP, TMP, TMPDIR, APPDATA and LOCALAPPDATA pointed at
+// the throwaway workspace, with no API keys, tokens, or repository variables in
+// its environment, and the payload has already cleared the secret scanner.
+const CREDENTIAL_ENV_KEYS = ['HOME', 'USERPROFILE'];
+
 export function buildProviderEnv(providerName, sourceEnv = process.env, workspaceDir) {
   if (typeof workspaceDir !== 'string' || !isAbsolute(workspaceDir)) {
     throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
@@ -16,26 +31,23 @@ export function buildProviderEnv(providerName, sourceEnv = process.env, workspac
 
   const safeEnv = {};
   const sourceKeys = Object.keys(sourceEnv ?? {});
-
-  for (const allowedKey of STARTUP_ENV_KEYS) {
+  const passThrough = (allowedKey) => {
     const sourceKey = sourceKeys.find((key) => key.toLowerCase() === allowedKey.toLowerCase());
     if (sourceKey !== undefined && sourceEnv[sourceKey] !== undefined) {
       safeEnv[allowedKey] = sourceEnv[sourceKey];
     }
-  }
+  };
+
+  for (const allowedKey of STARTUP_ENV_KEYS) passThrough(allowedKey);
+  for (const allowedKey of CREDENTIAL_ENV_KEYS) passThrough(allowedKey);
 
   Object.assign(safeEnv, {
-    HOME: workspaceDir,
-    USERPROFILE: workspaceDir,
     APPDATA: workspaceDir,
     LOCALAPPDATA: workspaceDir,
     TEMP: workspaceDir,
     TMP: workspaceDir,
     TMPDIR: workspaceDir,
   });
-
-  if (providerName === 'codex') safeEnv.CODEX_HOME = workspaceDir;
-  if (providerName === 'claude') safeEnv.CLAUDE_CONFIG_DIR = workspaceDir;
 
   return safeEnv;
 }

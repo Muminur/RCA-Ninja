@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { installGitleaksStub } from '../fixtures/gitleaks-test-env.mjs';
+import { pathWithoutProviders } from '../fixtures/provider-test-env.mjs';
 
 const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-codex-generate-bootstrap-'));
-process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+process.env.PATH = pathWithoutProviders(installGitleaksStub(scannerBootstrapDir));
 const { generate } = await import('../../src/generator.mjs');
 process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
 
@@ -40,7 +41,7 @@ describe('generate with Codex selected', () => {
               runs += 1;
             },
           }),
-        (error) => error.code === 'PROVIDER_ISOLATION_UNAVAILABLE',
+        (error) => error.code === 'PROVIDER_UNAVAILABLE',
       );
       assert.strictEqual(runs, 0);
     } finally {

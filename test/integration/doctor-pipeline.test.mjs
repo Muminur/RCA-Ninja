@@ -121,12 +121,12 @@ describe('doctor checks the RCA pipeline itself', () => {
       /^secret-scanner\s+FAIL\s+Gitleaks 8\.30\.1 or newer is required; install or upgrade Gitleaks\. Scanner failure refuses provider execution\.$/m,
     );
     assert.doesNotMatch(stdout, /^secret-scanner\s+ok/m);
-    assert.match(stdout, /^auto-gen\s+FAIL\s+.*unsafe.*provider isolation/im);
+    assert.match(stdout, /^auto-gen\s+FAIL\s+.*unsafe.*secret scanner/im);
     assert.doesNotMatch(stdout, /^auto-gen\s+ok/m);
     assert.strictEqual(status, 70);
   });
 
-  it('reports a healthy scanner and local hook without claiming provider execution is safe', () => {
+  it('reports auto-gen healthy once the scanner, hook, and isolation all hold', () => {
     const { repo, env } = makeRepo('claude-rca-doc-healthy-inputs-');
     writeFileSync(
       join(repo, '.claude-rca.json'),
@@ -142,10 +142,10 @@ describe('doctor checks the RCA pipeline itself', () => {
 
     assert.match(stdout, /^secret-scanner\s+ok\s+gitleaks version 8\.30\.1$/m);
     assert.match(stdout, /^hook\s+ok/m);
-    assert.match(stdout, /^provider-isolation\s+FAIL/m);
-    assert.match(stdout, /^auto-gen\s+FAIL\s+.*unsafe.*provider isolation/im);
-    assert.doesNotMatch(stdout, /^auto-gen\s+ok/m);
-    assert.strictEqual(status, 70);
+    assert.match(stdout, /^provider-isolation\s+ok\s+workspace-isolated/m);
+    assert.match(stdout, /^auto-gen\s+ok\s+true/m);
+    assert.doesNotMatch(stdout, /^auto-gen\s+FAIL/m);
+    assert.strictEqual(status, 0);
   });
 
   it('fails closed when the installed Gitleaks version is below 8.30.1', () => {
@@ -186,7 +186,9 @@ describe('doctor checks the RCA pipeline itself', () => {
 
     const { stdout } = runDoctor(repo, { ...env, PATH: pathWithoutGitleaks() });
     assert.match(stdout, /^auto-gen\s+WARN/m);
-    assert.match(stdout, /^auto-gen\s+WARN\s+.*disabled.*scanner.*hook.*provider isolation/im);
+    // Only the prerequisites that are actually missing get named.
+    assert.match(stdout, /^auto-gen\s+WARN\s+.*disabled.*secret scanner/im);
+    assert.doesNotMatch(stdout, /^auto-gen\s+WARN\s+.*provider isolation/im);
     assert.doesNotMatch(stdout, /config --set auto_generate=true/);
   });
 

@@ -49,6 +49,13 @@ const ERROR_TABLE = {
     exit: 33,
     template: 'No approved isolated provider broker is available; provider execution was refused.',
   },
+  // Names the providers and why each is out, never their raw output: a provider
+  // can echo the prompt back in an error, and the prompt carries the diff.
+  PROVIDER_UNAVAILABLE: {
+    category: 'env',
+    exit: 35,
+    template: 'No usable LLM provider: {providers}. Log in (claude /login, codex login) and retry.',
+  },
   NOT_FOUND: { category: 'input', exit: 40, template: 'RCA not found: {id}.' },
   FORBIDDEN_PATH: {
     category: 'input',

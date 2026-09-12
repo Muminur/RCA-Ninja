@@ -31,6 +31,7 @@ import { findRelatedRcas, readPriorRcas, detectRecurrences } from './dedup.mjs';
 import { runAnalyst } from './analyst.mjs';
 import { throwIfFailClosedProviderError } from './provider-safety.mjs';
 import { checkSecretScannerReadiness } from './secret-scan.mjs';
+import { verifyProviderIsolation } from './provider-run.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -349,9 +350,7 @@ export function createProgram() {
         doctorCheck(setupProvider, () =>
           execSync(setupBinary.split(/\s+/)[0], ['--version'], { encoding: 'utf8' }).trim(),
         );
-        doctorCheck('provider-isolation', () => {
-          throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
-        });
+        doctorCheck('provider-isolation', () => verifyProviderIsolation(setupProvider));
 
         const maxName = Math.max(...doctorChecks.map((c) => c.name.length));
         for (const c of doctorChecks) {
@@ -579,10 +578,13 @@ export function createProgram() {
               if (
                 [
                   'PROVIDER_ISOLATION_UNAVAILABLE',
+                  'PROVIDER_UNAVAILABLE',
                   'SECRET_SCAN_FAILED',
                   'SECRET_SCANNER_UNAVAILABLE',
                 ].includes(commitErr?.code)
               ) {
+                // No provider can run, or the gate refused: every remaining
+                // commit would fail the same way, so stop rather than churn.
                 throw commitErr;
               }
               process.stderr.write(`    ✖ skipped (${commitErr.message || String(commitErr)})\n`);
@@ -985,8 +987,11 @@ export function createProgram() {
         return execSync(bin, ['--version'], { encoding: 'utf8' }).trim();
       });
 
+      let isolationHealthy = false;
       check('provider-isolation', () => {
-        throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+        const detail = verifyProviderIsolation(providerName);
+        isolationHealthy = true;
+        return detail;
       });
 
       // Non-fatal, but always visible: the pipeline's own wiring. External
@@ -1153,23 +1158,37 @@ export function createProgram() {
       if (resolvedConfig) {
         try {
           const autoCfg = loadConfig({ cwd: doctorCwd, configPath: program.opts().config });
+          // Report what is actually missing. Asserting "provider isolation is
+          // unavailable" unconditionally is how a working pipeline gets a
+          // failing bill of health, which is the same disease as the reverse.
+          const unavailable = [];
+          if (!scannerHealthy) unavailable.push('secret scanner');
+          if (!hookHealthy) unavailable.push('local hook');
+          if (!isolationHealthy) unavailable.push('provider isolation');
+
           if (autoCfg.auto_generate === true) {
-            failures++;
-            const unavailable = [];
-            if (!scannerHealthy) unavailable.push('secret scanner');
-            if (!hookHealthy) unavailable.push('local hook');
-            unavailable.push('provider isolation');
-            note(
-              'auto-gen',
-              'FAIL',
-              `unsafe — ${unavailable.join(', ')} unavailable; automatic provider execution is refused`,
-            );
-          } else {
+            if (unavailable.length > 0) {
+              failures++;
+              note(
+                'auto-gen',
+                'FAIL',
+                `unsafe — ${unavailable.join(', ')} unavailable; automatic provider execution is refused`,
+              );
+            } else {
+              note(
+                'auto-gen',
+                'ok',
+                'true — triggering commits generate RCAs automatically (see triggers.commit_types)',
+              );
+            }
+          } else if (unavailable.length > 0) {
             note(
               'auto-gen',
               'WARN',
-              'disabled — scanner, local hook, and provider isolation are required; automatic provider execution is unavailable',
+              `disabled — and ${unavailable.join(', ')} would block it anyway`,
             );
+          } else {
+            note('auto-gen', 'WARN', 'disabled — set auto_generate=true to generate on commit');
           }
         } catch {
           note('auto-gen', 'WARN', 'config could not be loaded');

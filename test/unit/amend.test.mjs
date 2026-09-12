@@ -11,10 +11,11 @@ import {
   scannerReceiptMarker,
   scannerRejectPayload,
 } from '../fixtures/gitleaks-test-env.mjs';
+import { pathWithoutProviders, NO_PROVIDER_MESSAGE } from '../fixtures/provider-test-env.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-amend-bootstrap-'));
-process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+process.env.PATH = pathWithoutProviders(installGitleaksStub(scannerBootstrapDir));
 const { amendRca } = await import('../../src/amend.mjs');
 process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
 
@@ -134,11 +135,8 @@ describe('amendRca fail-closed generation boundary', () => {
             },
           }),
         (error) => {
-          assert.strictEqual(error.code, 'PROVIDER_ISOLATION_UNAVAILABLE');
-          assert.strictEqual(
-            error.message,
-            'No approved isolated provider broker is available; provider execution was refused.',
-          );
+          assert.strictEqual(error.code, 'PROVIDER_UNAVAILABLE');
+          assert.strictEqual(error.message, NO_PROVIDER_MESSAGE);
           return true;
         },
       );
@@ -207,7 +205,7 @@ describe('amendRca fail-closed generation boundary', () => {
             schemaPath,
             _buildContextFn: async () => makeContext(),
           }),
-        (error) => error.code === 'PROVIDER_ISOLATION_UNAVAILABLE',
+        (error) => error.code === 'PROVIDER_UNAVAILABLE',
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });

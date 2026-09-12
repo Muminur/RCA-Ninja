@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { pathWithoutProviders } from '../fixtures/provider-test-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -18,14 +19,18 @@ function git(args, cwd) {
   }).trim();
 }
 
-// Generation itself is fail-closed on this tree (no approved isolated provider
-// broker), so these assert which commits the CLI *selects* — the trigger rule —
-// by reading the per-commit progress it prints before calling a provider.
+// These assert which commits the CLI *selects* — the trigger rule — not what a
+// model writes. Providers are stripped from PATH so generation fails fast and
+// deterministically at the invocation instead of reaching the developer's own
+// logged-in CLI and billing a real call.
+const NO_PROVIDER_PATH = pathWithoutProviders();
+
 function runCli(args, cwd) {
   const result = spawnSync('node', [BIN, ...args], {
     cwd,
     encoding: 'utf8',
     timeout: 120000,
+    env: { ...process.env, PATH: NO_PROVIDER_PATH },
   });
   return `${result.stdout || ''}${result.stderr || ''}`;
 }

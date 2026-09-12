@@ -9,9 +9,10 @@ import {
   scannerReceiptMarker,
   scannerRejectPayload,
 } from '../fixtures/gitleaks-test-env.mjs';
+import { pathWithoutProviders, NO_PROVIDER_MESSAGE } from '../fixtures/provider-test-env.mjs';
 
 const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-generate-bootstrap-'));
-process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+process.env.PATH = pathWithoutProviders(installGitleaksStub(scannerBootstrapDir));
 const { generate } = await import('../../src/generator.mjs');
 process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
 
@@ -85,12 +86,14 @@ describe('generate provider security gate', () => {
             },
           }),
         (error) => {
-          assert.strictEqual(error.code, 'PROVIDER_ISOLATION_UNAVAILABLE');
-          assert.strictEqual(
-            error.message,
-            'No approved isolated provider broker is available; provider execution was refused.',
+          assert.strictEqual(error.code, 'PROVIDER_UNAVAILABLE');
+          assert.strictEqual(error.message, NO_PROVIDER_MESSAGE);
+          assert.deepStrictEqual(
+            Object.keys(error.context),
+            ['providers'],
+            'the error may name which providers are out, and nothing else',
           );
-          assert.deepStrictEqual(error.context, {});
+          assert.doesNotMatch(error.message, /diagnostic|SCANNER_REJECT/i);
           return true;
         },
       );
@@ -133,7 +136,7 @@ describe('generate provider security gate', () => {
 
       await assert.rejects(
         () => generate(input),
-        (error) => error.code === 'PROVIDER_ISOLATION_UNAVAILABLE',
+        (error) => error.code === 'PROVIDER_UNAVAILABLE',
       );
 
       const scanned = JSON.parse(readFileSync(receiptPath, 'utf8'));
@@ -167,6 +170,7 @@ describe('generate provider security gate', () => {
           assert.strictEqual(error.code, 'SECRET_SCAN_FAILED');
           assert.strictEqual(error.message, 'The secret scanner blocked provider execution.');
           assert.deepStrictEqual(error.context, {});
+          assert.doesNotMatch(error.message, /diagnostic|SCANNER_REJECT/i);
           assert.ok(!error.message.includes('sensitive diagnostics'));
           return true;
         },

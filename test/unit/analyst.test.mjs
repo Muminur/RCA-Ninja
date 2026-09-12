@@ -9,9 +9,10 @@ import {
   scannerReceiptMarker,
   scannerRejectPayload,
 } from '../fixtures/gitleaks-test-env.mjs';
+import { pathWithoutProviders, NO_PROVIDER_MESSAGE } from '../fixtures/provider-test-env.mjs';
 
 const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-analyst-bootstrap-'));
-process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+process.env.PATH = pathWithoutProviders(installGitleaksStub(scannerBootstrapDir));
 const { runAnalyst } = await import('../../src/analyst.mjs');
 process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
 
@@ -33,7 +34,7 @@ describe('runAnalyst provider security gate', () => {
             config: {},
             cwd: relative(process.cwd(), dir),
           }),
-        (error) => error.code === 'PROVIDER_ISOLATION_UNAVAILABLE',
+        (error) => error.code === 'PROVIDER_UNAVAILABLE',
       );
       assert.ok(readFileSync(receiptPath, 'utf8').includes('Safe analyst prompt'));
     } finally {
@@ -73,12 +74,14 @@ describe('runAnalyst provider security gate', () => {
             },
           }),
         (error) => {
-          assert.strictEqual(error.code, 'PROVIDER_ISOLATION_UNAVAILABLE');
-          assert.strictEqual(
-            error.message,
-            'No approved isolated provider broker is available; provider execution was refused.',
+          assert.strictEqual(error.code, 'PROVIDER_UNAVAILABLE');
+          assert.strictEqual(error.message, NO_PROVIDER_MESSAGE);
+          assert.deepStrictEqual(
+            Object.keys(error.context),
+            ['providers'],
+            'the error may name which providers are out, and nothing else',
           );
-          assert.deepStrictEqual(error.context, {});
+          assert.doesNotMatch(error.message, /diagnostic|SCANNER_REJECT/i);
           return true;
         },
       );
@@ -110,6 +113,7 @@ describe('runAnalyst provider security gate', () => {
           assert.strictEqual(error.code, 'SECRET_SCAN_FAILED');
           assert.strictEqual(error.message, 'The secret scanner blocked provider execution.');
           assert.deepStrictEqual(error.context, {});
+          assert.doesNotMatch(error.message, /diagnostic|SCANNER_REJECT/i);
           assert.ok(!error.message.includes('sensitive diagnostics'));
           return true;
         },

@@ -11,6 +11,7 @@ import {
   pathWithoutGitleaks,
   scannerRejectPayload,
 } from '../fixtures/gitleaks-test-env.mjs';
+import { pathWithoutProviders } from '../fixtures/provider-test-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -46,18 +47,18 @@ function setup(fixedContent = 'let a = 2;\n') {
 }
 
 describe('generate --since provider refusal', () => {
-  it('exits nonzero and writes no RCA when provider isolation is unavailable', () => {
+  it('exits nonzero and writes no RCA when no provider can be reached', () => {
     const { tmp, repo, base } = setup();
     try {
       const result = spawnSync('node', [BIN, 'generate', '--since', base], {
         cwd: repo,
         encoding: 'utf8',
-        env: { ...process.env, PATH: installGitleaksStub(tmp) },
+        env: { ...process.env, PATH: pathWithoutProviders(installGitleaksStub(tmp)) },
         timeout: 60000,
       });
 
-      assert.strictEqual(result.status, 33, result.stderr);
-      assert.ok(result.stderr.includes('provider execution was refused'));
+      assert.strictEqual(result.status, 35, result.stderr);
+      assert.ok(result.stderr.includes('No usable LLM provider'));
       assert.ok(!result.stderr.includes('skipped'));
       assert.strictEqual(existsSync(join(repo, 'rca')), false);
     } finally {

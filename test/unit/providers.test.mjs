@@ -125,8 +125,11 @@ describe('claude adapter — buildGenerateInvocation', () => {
       assert.strictEqual(inv.cwd, workspaceDir);
       assert.ok(inv.input.includes(payload), 'the complete payload must use stdin');
       assert.ok(!inv.argv.some((arg) => arg.length > 10_000), 'large input must not enter argv');
+      assert.ok(
+        !inv.argv.includes('--bare'),
+        '--bare invocations come back not-logged-in even on a logged-in machine',
+      );
       for (const flag of [
-        '--bare',
         '--safe-mode',
         '--tools',
         '--no-session-persistence',
@@ -314,7 +317,7 @@ describe('provider environment allowlist', () => {
     }
   });
 
-  it('gives Claude sterile roots and no inherited auth, profile, or unrelated secrets', () => {
+  it('gives Claude sterile scratch roots and no inherited auth or unrelated secrets', () => {
     const workspaceDir = join(tmpdir(), 'sterile-claude-workspace');
     const env = shared.buildProviderEnv(
       'claude',
@@ -330,20 +333,25 @@ describe('provider environment allowlist', () => {
       },
       workspaceDir,
     );
+    // HOME and USERPROFILE pass through on purpose: the CLI keeps its login
+    // there, and redirecting them logs the provider out rather than sandboxing
+    // it. Everything else is either dropped or pointed at the workspace.
     assert.deepStrictEqual(env, {
       PATH: '/bin',
-      HOME: workspaceDir,
-      USERPROFILE: workspaceDir,
+      HOME: '/real/profile',
+      USERPROFILE: 'C:\\real\\profile',
       APPDATA: workspaceDir,
       LOCALAPPDATA: workspaceDir,
       TEMP: workspaceDir,
       TMP: workspaceDir,
       TMPDIR: workspaceDir,
-      CLAUDE_CONFIG_DIR: workspaceDir,
     });
+    assert.ok(!('ANTHROPIC_API_KEY' in env), 'API keys must never reach the provider');
+    assert.ok(!('CLAUDE_CODE_OAUTH_TOKEN' in env));
+    assert.ok(!('DATABASE_URL' in env));
   });
 
-  it('gives Codex sterile roots and no inherited auth, profile, or unrelated secrets', () => {
+  it('gives Codex sterile scratch roots and no inherited auth or unrelated secrets', () => {
     const workspaceDir = join(tmpdir(), 'sterile-codex-workspace');
     const env = shared.buildProviderEnv(
       'codex',
@@ -361,15 +369,17 @@ describe('provider environment allowlist', () => {
     );
     assert.deepStrictEqual(env, {
       PATH: '/bin',
-      HOME: workspaceDir,
-      USERPROFILE: workspaceDir,
+      HOME: '/real/profile',
+      USERPROFILE: 'C:\\real\\profile',
       APPDATA: workspaceDir,
       LOCALAPPDATA: workspaceDir,
       TEMP: workspaceDir,
       TMP: workspaceDir,
       TMPDIR: workspaceDir,
-      CODEX_HOME: workspaceDir,
     });
+    assert.ok(!('OPENAI_API_KEY' in env), 'API keys must never reach the provider');
+    assert.ok(!('CODEX_API_KEY' in env));
+    assert.ok(!('DATABASE_URL' in env));
   });
 });
 

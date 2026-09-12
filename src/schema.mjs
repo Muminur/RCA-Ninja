@@ -22,6 +22,8 @@ const CONFIG_SCHEMA = {
       additionalProperties: false,
       properties: {
         binary: { type: 'string', default: 'claude' },
+        // Accepted for backwards compatibility but ignored: --bare is never
+        // passed. See claudeBaseArgs in src/providers/claude.mjs.
         use_bare: { type: 'boolean', default: true },
         permission_mode: { enum: ['plan', 'default', 'bypassPermissions'], default: 'plan' },
         allowed_tools: { type: 'string', default: 'Read' },
