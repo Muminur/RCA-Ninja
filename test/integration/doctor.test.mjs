@@ -37,11 +37,11 @@ describe('doctor', () => {
   });
 
   it(
-    'exits 0 when all tools are present',
+    'exits unhealthy when tools are present but provider isolation is unavailable',
     { skip: !ALL_TOOLS_AVAILABLE ? 'not all tools on PATH' : false },
     () => {
       const { status } = runDoctor();
-      assert.strictEqual(status, 0);
+      assert.strictEqual(status, 70);
     },
   );
 

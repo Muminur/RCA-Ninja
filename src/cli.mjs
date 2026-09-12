@@ -1,8 +1,8 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
-import { basename, dirname, join, resolve as resolvePath } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import {
@@ -11,12 +11,13 @@ import {
   getConfigValue,
   setConfigValue,
   findProjectConfig,
+  PROJECT_CONFIG_NAME,
 } from './config.mjs';
 import { RcaError } from './errors.mjs';
 import { buildContext } from './context.mjs';
 import { isTriggeringCommit } from './triggers.mjs';
 import * as git from './util/git.mjs';
-import { generate, scanForSecrets } from './generator.mjs';
+import { generate } from './generator.mjs';
 import { renderRca } from './renderer.mjs';
 import { writeRca, computeRcaPath } from './writer.mjs';
 import { search, recent, show } from './search.mjs';
@@ -28,10 +29,82 @@ import { resolveTemplatePaths } from './template.mjs';
 import { auditCorpus } from './audit.mjs';
 import { findRelatedRcas, readPriorRcas, detectRecurrences } from './dedup.mjs';
 import { runAnalyst } from './analyst.mjs';
+import { throwIfFailClosedProviderError } from './provider-safety.mjs';
+import { checkSecretScannerReadiness } from './secret-scan.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const pkg = require(join(__dirname, '..', 'package.json'));
+const SECRET_SCANNER_REMEDIATION =
+  'Gitleaks 8.30.1 or newer is required; install or upgrade Gitleaks. Scanner failure refuses provider execution.';
+
+function secretScannerError() {
+  const error = new RcaError('SECRET_SCANNER_UNAVAILABLE');
+  error.message = SECRET_SCANNER_REMEDIATION;
+  return error;
+}
+
+function checkSecretScanner(cwd) {
+  try {
+    return checkSecretScannerReadiness(resolvePath(cwd));
+  } catch {
+    throw secretScannerError();
+  }
+}
+
+function unsafeGitEnvironmentVariable() {
+  return Object.keys(process.env).find((name) => {
+    const normalized = name.toUpperCase();
+    return (
+      normalized.startsWith('GIT_CONFIG') ||
+      normalized === 'GIT_DIR' ||
+      normalized === 'GIT_WORK_TREE' ||
+      normalized === 'GIT_COMMON_DIR' ||
+      normalized === 'GIT_ATTR_NOSYSTEM'
+    );
+  });
+}
+
+function canonicalizePath(path) {
+  let existing = resolvePath(path);
+  const missing = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) return null;
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
+  return resolvePath(realpathSync(existing), ...missing);
+}
+
+function pathIsWithin(path, root) {
+  const child = relative(root, path);
+  return (
+    child === '' ||
+    (child !== '..' && !child.startsWith(`..${pathSeparator}`) && !isAbsolute(child))
+  );
+}
+
+const pathSeparator = process.platform === 'win32' ? '\\' : '/';
+
+function hookDirIsRepositoryLocal(execSync, cwd, hookDir) {
+  const canonicalHookDir = canonicalizePath(hookDir);
+  if (!canonicalHookDir) return false;
+  const roots = ['--show-toplevel', '--absolute-git-dir', '--git-common-dir'];
+  return roots.some((query) => {
+    let root;
+    try {
+      root = execSync('git', ['rev-parse', '--path-format=absolute', query], {
+        cwd,
+        encoding: 'utf8',
+      }).trim();
+    } catch {
+      return false;
+    }
+    const canonicalRoot = canonicalizePath(root);
+    return canonicalRoot ? pathIsWithin(canonicalHookDir, canonicalRoot) : false;
+  });
+}
 
 export function createProgram() {
   const program = new Command();
@@ -80,7 +153,7 @@ export function createProgram() {
                 timeout: 30000,
               });
             } else {
-              result = spawnSync('bash', [hookSh], {
+              result = spawnSync('bash', [hookSh, cwd], {
                 cwd,
                 shell: false,
                 stdio: ['ignore', 'pipe', 'pipe'],
@@ -119,7 +192,9 @@ export function createProgram() {
               process.stderr.write(
                 `⚠ ${cliName} is not on PATH — the post-commit hook will not fire.\n`,
               );
-              process.stderr.write(`  Run: cd ${join(__dirname, '..')} && npm link\n`);
+              process.stderr.write(
+                `  Install ${cliName} on PATH before relying on this repository's local hook.\n`,
+              );
             }
           } catch {
             // Ignore — best-effort check
@@ -136,7 +211,7 @@ export function createProgram() {
 
   program
     .command('setup')
-    .description('Interactive setup wizard — configure vault, API keys, and environment')
+    .description('Interactive setup wizard — configure local RCA output and prerequisites')
     .action(async () => {
       function ask(question) {
         const rl = createInterface({ input: process.stdin, output: process.stderr });
@@ -215,9 +290,12 @@ export function createProgram() {
           }
         }
 
-        // Step 4: Set auto_generate=true
-        setConfigValue(configPath, 'auto_generate', 'true');
-        process.stderr.write(`✓ set auto_generate=true\n`);
+        // Step 4: Keep automatic generation disabled until an approved
+        // provider isolation boundary is implemented.
+        setConfigValue(configPath, 'auto_generate', 'false');
+        process.stderr.write(
+          `⚠ set auto_generate=false — automatic generation requires Gitleaks 8.30.1 or newer, an effective local post-commit hook, and approved provider isolation, which is unavailable; run "${cliName} doctor" for remediation.\n`,
+        );
 
         // Step 5: Set obsidian.enabled=true with vault path
         if (vaultPath) {
@@ -257,21 +335,23 @@ export function createProgram() {
           () => execSync('rg', ['--version'], { encoding: 'utf8' }).trim().split('\n')[0],
         );
 
+        doctorCheck('secret-scanner', () => checkSecretScanner(cwd));
+
         let setupProvider = 'claude';
         let setupBinary = 'claude';
         try {
           const cfg = loadConfig({ cwd, configPath });
           setupProvider = cfg.provider || 'claude';
-          setupBinary =
-            setupProvider === 'codex'
-              ? cfg.codex?.binary || 'codex'
-              : cfg.claude?.binary || 'claude';
+          setupBinary = setupProvider === 'codex' ? 'codex' : 'claude';
         } catch {
           /* fall back to claude defaults */
         }
         doctorCheck(setupProvider, () =>
           execSync(setupBinary.split(/\s+/)[0], ['--version'], { encoding: 'utf8' }).trim(),
         );
+        doctorCheck('provider-isolation', () => {
+          throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+        });
 
         const maxName = Math.max(...doctorChecks.map((c) => c.name.length));
         for (const c of doctorChecks) {
@@ -281,7 +361,9 @@ export function createProgram() {
         // Step 7: Print summary
         process.stderr.write('\n--- Setup complete ---\n');
         process.stderr.write(`  Config:       ${configPath}\n`);
-        process.stderr.write(`  auto_generate: true\n`);
+        process.stderr.write(
+          `  auto_generate: false (scanner, local hook, and provider isolation required)\n`,
+        );
         if (vaultPath) {
           process.stderr.write(`  Vault:        ${vaultPath}\n`);
         } else {
@@ -305,7 +387,9 @@ export function createProgram() {
 
   program
     .command('generate')
-    .description('Generate an RCA for a commit')
+    .description(
+      'Generate an RCA for a commit; Gitleaks 8.30.1 or newer is required and scanner failure refuses provider execution',
+    )
     .option('--from <ref>', 'Git ref to analyze', 'HEAD')
     .option('--since <ref>', 'Batch-generate RCAs for every triggering commit since <ref>')
     .option('--max <n>', 'Cap how many commits --since processes in one run', '10')
@@ -317,7 +401,6 @@ export function createProgram() {
     .option('--logs <file>', 'Attach log file')
     .option('--dry-run', 'Print what would be generated without writing')
     .option('--no-obsidian', 'Skip Obsidian sync')
-    .option('--no-secret-scan', 'Skip secret scanning of diff')
     .option(
       '--analyze',
       'Run rca-analyst quality check after generation; prompt to amend on TTY if REVISE/REJECT',
@@ -331,12 +414,101 @@ export function createProgram() {
         const configPath = program.opts().config;
         const cfg = loadConfig({ cwd, configPath });
 
+        // Shared by --from and --since. Batch mode previously wrote the RCA and
+        // stopped there, so a backfill silently left the vault missing every
+        // document it produced.
+        async function deliverRca({ writtenPath, rca, context }) {
+          if (opts.obsidian !== false && cfg.obsidian && cfg.obsidian.enabled) {
+            try {
+              const { resolveTargetFolder } = await import('./obsidian.mjs');
+              const repoName = context.repo_root ? context.repo_root.split(/[/\\]/).pop() : '';
+              const targetFolder = resolveTargetFolder({
+                configTargetFolder: cfg.obsidian.target_folder || '',
+                repoName,
+              });
+              const vaultPath = cfg.obsidian.vault_path;
+              const rcaBasename = basename(writtenPath);
+              const rcaContent = readFileSync(writtenPath, 'utf8');
+              let synced = false;
+
+              if (cfg.obsidian.api_key) {
+                try {
+                  const client = createObsidianClient({
+                    apiKey: cfg.obsidian.api_key,
+                    host: cfg.obsidian.api_host || '127.0.0.1',
+                    port: cfg.obsidian.api_port || 27124,
+                    protocol: cfg.obsidian.api_protocol || 'https',
+                  });
+                  const notePath = `${targetFolder}/${rcaBasename}`;
+                  await client.createNote(notePath, rcaContent);
+                  process.stderr.write(`✓ synced to vault via REST API: ${notePath}\n`);
+                  synced = true;
+
+                  if (cfg.obsidian.update_daily_note) {
+                    const dailyNotesFolder = cfg.obsidian.daily_notes_folder || 'Daily Notes';
+                    const format = cfg.obsidian.daily_note_format || 'YYYY-MM-DD';
+                    const today = new Date().toISOString().slice(0, 10);
+                    const noteName = format
+                      .replace('YYYY', today.slice(0, 4))
+                      .replace('MM', today.slice(5, 7))
+                      .replace('DD', today.slice(8, 10));
+                    const linkName = rcaBasename.replace(/\.md$/, '');
+                    const bullet = `\n- [[${linkName}]] — ${rca.title}\n`;
+                    try {
+                      await client.appendNote(`${dailyNotesFolder}/${noteName}.md`, bullet);
+                      process.stderr.write(`✓ daily note updated via REST API\n`);
+                    } catch {
+                      process.stderr.write(`⚠ daily note not found (skipped)\n`);
+                    }
+                  }
+                } catch (apiErr) {
+                  process.stderr.write(`⚠ REST API sync failed: ${apiErr.message}\n`);
+                  process.stderr.write(`  falling back to filesystem sync...\n`);
+                }
+              }
+
+              if (!synced && vaultPath) {
+                await syncToVault({ rcaPath: writtenPath, vaultPath, targetFolder });
+                process.stderr.write(
+                  `✓ synced to vault via filesystem: ${targetFolder}/${rcaBasename}\n`,
+                );
+
+                if (cfg.obsidian.update_daily_note) {
+                  appendDailyNote({
+                    vaultPath,
+                    dailyNotesFolder: cfg.obsidian.daily_notes_folder || 'Daily Notes',
+                    dailyNoteFormat: cfg.obsidian.daily_note_format || 'YYYY-MM-DD',
+                    rcaBasename,
+                    title: rca.title,
+                  });
+                }
+              }
+
+              if (cfg.obsidian.open_on_create && vaultPath) {
+                const uri = buildObsidianUri({ vaultPath, targetFolder, rcaBasename });
+                process.stderr.write(`✓ obsidian: ${uri}\n`);
+              }
+            } catch (obsErr) {
+              process.stderr.write(`⚠ obsidian sync failed: ${obsErr.message}\n`);
+            }
+          }
+
+          // Webhook notification (non-blocking, like Obsidian sync)
+          if (cfg.webhooks && cfg.webhooks.enabled && cfg.webhooks.url) {
+            try {
+              await sendWebhook(rca, writtenPath, cfg);
+            } catch (whErr) {
+              process.stderr.write(`⚠ webhook notification failed: ${whErr.message}\n`);
+            }
+          }
+        }
+
         // --since: batch mode for historical commits
         if (opts.since) {
           const { getFixCommits } = await import('./context.mjs');
           const fixCommits = await getFixCommits({ cwd, since: opts.since, config: cfg });
           if (fixCommits.length === 0) {
-            process.stderr.write('No fix: commits found in range.\n');
+            process.stderr.write('No triggering commits found in range.\n');
             return;
           }
           const { existingRefs } = await import('./manifest.mjs');
@@ -371,12 +543,6 @@ export function createProgram() {
             process.stderr.write(`  Processing ${hash.slice(0, 7)}: ${subject}\n`);
             try {
               const context = await buildContext({ cwd, ref: hash });
-              // The single-ref path scans for secrets; this is now the automated
-              // post-merge path, so it has to scan too.
-              if (opts.secretScan !== false && scanForSecrets(context.diff)) {
-                process.stderr.write('    x skipped (secret detected in diff)\n');
-                continue;
-              }
               const priorRcas = readPriorRcas({
                 outputDir: cfg.output_dir,
                 filesChanged: context.files_changed,
@@ -408,7 +574,17 @@ export function createProgram() {
               } catch {
                 /* non-blocking */
               }
+              await deliverRca({ writtenPath, rca, context });
             } catch (commitErr) {
+              if (
+                [
+                  'PROVIDER_ISOLATION_UNAVAILABLE',
+                  'SECRET_SCAN_FAILED',
+                  'SECRET_SCANNER_UNAVAILABLE',
+                ].includes(commitErr?.code)
+              ) {
+                throw commitErr;
+              }
               process.stderr.write(`    ✖ skipped (${commitErr.message || String(commitErr)})\n`);
             }
           }
@@ -427,15 +603,6 @@ export function createProgram() {
 
         progress.start('Extracting context');
         const context = await buildContext({ cwd, ref: opts.from });
-
-        progress.update('Scanning for secrets');
-        // commander maps --no-secret-scan onto opts.secretScan, which defaults to
-        // true. The old `!opts.secretScan` guard skipped the scan by default and
-        // ran it only when the user asked to bypass it.
-        if (opts.secretScan !== false && scanForSecrets(context.diff)) {
-          progress.fail('Secret scan failed');
-          throw new RcaError('SECRETS_DETECTED', {});
-        }
 
         const defaultSystemPromptPath = join(__dirname, '..', 'prompts', 'rca-system.md');
         const defaultSchemaPath = join(__dirname, '..', 'prompts', 'rca-schema.json');
@@ -513,90 +680,8 @@ export function createProgram() {
           // manifest rebuild is non-blocking
         }
 
-        if (opts.obsidian !== false && cfg.obsidian && cfg.obsidian.enabled) {
-          progress.update('Syncing to Obsidian');
-          try {
-            const { resolveTargetFolder } = await import('./obsidian.mjs');
-            const repoName = context.repo_root ? context.repo_root.split(/[/\\]/).pop() : '';
-            const targetFolder = resolveTargetFolder({
-              configTargetFolder: cfg.obsidian.target_folder || '',
-              repoName,
-            });
-            const vaultPath = cfg.obsidian.vault_path;
-            const rcaBasename = basename(writtenPath);
-            const rcaContent = readFileSync(writtenPath, 'utf8');
-            let synced = false;
-
-            if (cfg.obsidian.api_key) {
-              try {
-                const client = createObsidianClient({
-                  apiKey: cfg.obsidian.api_key,
-                  host: cfg.obsidian.api_host || '127.0.0.1',
-                  port: cfg.obsidian.api_port || 27124,
-                  protocol: cfg.obsidian.api_protocol || 'https',
-                });
-                const notePath = `${targetFolder}/${rcaBasename}`;
-                await client.createNote(notePath, rcaContent);
-                process.stderr.write(`✓ synced to vault via REST API: ${notePath}\n`);
-                synced = true;
-
-                if (cfg.obsidian.update_daily_note) {
-                  const dailyNotesFolder = cfg.obsidian.daily_notes_folder || 'Daily Notes';
-                  const format = cfg.obsidian.daily_note_format || 'YYYY-MM-DD';
-                  const today = new Date().toISOString().slice(0, 10);
-                  const noteName = format
-                    .replace('YYYY', today.slice(0, 4))
-                    .replace('MM', today.slice(5, 7))
-                    .replace('DD', today.slice(8, 10));
-                  const linkName = rcaBasename.replace(/\.md$/, '');
-                  const bullet = `\n- [[${linkName}]] — ${rca.title}\n`;
-                  try {
-                    await client.appendNote(`${dailyNotesFolder}/${noteName}.md`, bullet);
-                    process.stderr.write(`✓ daily note updated via REST API\n`);
-                  } catch {
-                    process.stderr.write(`⚠ daily note not found (skipped)\n`);
-                  }
-                }
-              } catch (apiErr) {
-                process.stderr.write(`⚠ REST API sync failed: ${apiErr.message}\n`);
-                process.stderr.write(`  falling back to filesystem sync...\n`);
-              }
-            }
-
-            if (!synced && vaultPath) {
-              await syncToVault({ rcaPath: writtenPath, vaultPath, targetFolder });
-              process.stderr.write(
-                `✓ synced to vault via filesystem: ${targetFolder}/${rcaBasename}\n`,
-              );
-
-              if (cfg.obsidian.update_daily_note) {
-                appendDailyNote({
-                  vaultPath,
-                  dailyNotesFolder: cfg.obsidian.daily_notes_folder || 'Daily Notes',
-                  dailyNoteFormat: cfg.obsidian.daily_note_format || 'YYYY-MM-DD',
-                  rcaBasename,
-                  title: rca.title,
-                });
-              }
-            }
-
-            if (cfg.obsidian.open_on_create && vaultPath) {
-              const uri = buildObsidianUri({ vaultPath, targetFolder, rcaBasename });
-              process.stderr.write(`✓ obsidian: ${uri}\n`);
-            }
-          } catch (obsErr) {
-            process.stderr.write(`⚠ obsidian sync failed: ${obsErr.message}\n`);
-          }
-        }
-
-        // Webhook notification (non-blocking, like Obsidian sync)
-        if (cfg.webhooks && cfg.webhooks.enabled && cfg.webhooks.url) {
-          try {
-            await sendWebhook(rca, writtenPath, cfg);
-          } catch (whErr) {
-            process.stderr.write(`⚠ webhook notification failed: ${whErr.message}\n`);
-          }
-        }
+        progress.update('Syncing to Obsidian');
+        await deliverRca({ writtenPath, rca, context });
 
         // Analyst quality check (opt-in via --analyze)
         if (opts.analyze) {
@@ -608,8 +693,10 @@ export function createProgram() {
               writtenPath,
               systemPromptPath: analystPromptPath,
               config: cfg,
+              cwd: resolvePath(cwd),
             });
-          } catch {
+          } catch (analystError) {
+            throwIfFailClosedProviderError(analystError);
             process.stderr.write('⚠ Analyst failed — skipping quality check\n');
           }
           progress.stop();
@@ -645,6 +732,7 @@ export function createProgram() {
                     process.stderr.write(`Amended: ${amended.path}\n`);
                     writtenPath = amended.path;
                   } catch (amendErr) {
+                    throwIfFailClosedProviderError(amendErr);
                     process.stderr.write(`⚠ Amend failed: ${amendErr.message}\n`);
                   }
                 }
@@ -759,10 +847,24 @@ export function createProgram() {
     .option('--get <key>', 'Get a config value')
     .option('--set <key=value>', 'Set a config value')
     .option('--list', 'List all config values')
+    .option('--path', 'Print the resolved config file path; exit 1 if none was found')
     .action((opts) => {
       try {
         const cwd = program.opts().cwd || process.cwd();
         const configPath = program.opts().config;
+
+        if (opts.path) {
+          // Lets callers (the post-commit hook, doctor) distinguish
+          // "no config found here" from "auto_generate is deliberately off".
+          // Resolved without loadConfig(), so it still answers for a broken config.
+          const resolved = configPath || findProjectConfig(cwd);
+          if (!resolved) {
+            process.stderr.write(`config: no ${PROJECT_CONFIG_NAME} found for ${cwd}\n`);
+            process.exit(1);
+          }
+          process.stdout.write(resolved + '\n');
+          return;
+        }
 
         if (opts.set) {
           // Do NOT loadConfig() here: --set is the command that repairs a broken
@@ -775,12 +877,12 @@ export function createProgram() {
           }
           const key = opts.set.slice(0, eqIdx);
           const value = opts.set.slice(eqIdx + 1);
-          // Write back to whichever file --config selected; otherwise update the
-          // project's config wherever it lives, not a fresh one in cwd.
-          const project = findProjectConfig(cwd);
+          // Write back to whichever file --config selected; otherwise edit the
+          // config loadConfig actually reads — from a linked worktree that is the
+          // main checkout's file, not a stray new copy in cwd.
           const targetPath = configPath
             ? resolvePath(cwd, configPath)
-            : project.path || join(project.root, '.claude-rca.json');
+            : findProjectConfig(cwd) || join(cwd, '.claude-rca.json');
           setConfigValue(targetPath, key, value);
           process.stderr.write(`✓ set ${key}\n`);
           return;
@@ -789,6 +891,12 @@ export function createProgram() {
         const cfg = loadConfig({ cwd, configPath });
         if (opts.get) {
           const val = getConfigValue(cfg, opts.get);
+          // An unset key must not print the literal "undefined": callers do
+          // `LOG=$(config --get log.file)` and would write to a file by that name.
+          if (val === undefined) {
+            process.stderr.write(`config: ${opts.get} is not set\n`);
+            process.exit(1);
+          }
           process.stdout.write(
             (typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val)) + '\n',
           );
@@ -811,10 +919,15 @@ export function createProgram() {
 
   program
     .command('doctor')
-    .description('Check environment: Node, claude, rg, git, vault')
+    .description('Check local hooks, Gitleaks, provider safety, and RCA dependencies')
     .action(async () => {
       const { execFileSync: execSync } = await import('node:child_process');
-      const { existsSync: fsExistsSync, readFileSync: fsReadFileSync } = await import('node:fs');
+      const {
+        existsSync: fsExistsSync,
+        lstatSync: fsLstatSync,
+        readFileSync: fsReadFileSync,
+        realpathSync: fsRealpathSync,
+      } = await import('node:fs');
       const { join: pathJoin } = await import('node:path');
       const checks = [];
       let failures = 0;
@@ -848,6 +961,13 @@ export function createProgram() {
         return ver;
       });
 
+      let scannerHealthy = false;
+      check('secret-scanner', () => {
+        const detail = checkSecretScanner(program.opts().cwd || process.cwd());
+        scannerHealthy = true;
+        return detail;
+      });
+
       // Check the binary for the configured LLM provider (claude or codex), not
       // a hardcoded one — a codex user must not fail doctor for lacking claude.
       let providerName = 'claude';
@@ -856,8 +976,7 @@ export function createProgram() {
         const cwd = program.opts().cwd || process.cwd();
         const cfg = loadConfig({ cwd, configPath: program.opts().config });
         providerName = cfg.provider || 'claude';
-        providerBinary =
-          providerName === 'codex' ? cfg.codex?.binary || 'codex' : cfg.claude?.binary || 'claude';
+        providerBinary = providerName === 'codex' ? 'codex' : 'claude';
       } catch {
         /* fall back to claude defaults */
       }
@@ -865,6 +984,197 @@ export function createProgram() {
         const bin = providerBinary.split(/\s+/)[0];
         return execSync(bin, ['--version'], { encoding: 'utf8' }).trim();
       });
+
+      check('provider-isolation', () => {
+        throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+      });
+
+      // Non-fatal, but always visible: the pipeline's own wiring. External
+      // tools being healthy told us nothing about whether RCAs were actually
+      // being produced — a dead pipeline reported a clean bill of health.
+      function note(name, status, detail) {
+        checks.push({ name, status, detail });
+      }
+
+      const doctorCwd = program.opts().cwd || process.cwd();
+      const resolvedConfig = program.opts().config || findProjectConfig(doctorCwd);
+      if (resolvedConfig) {
+        note('config', 'ok', resolvedConfig);
+      } else {
+        note('config', 'WARN', `no ${PROJECT_CONFIG_NAME} resolved — run '${cliName} init'`);
+      }
+
+      // Honour only an effective core.hooksPath whose origin is the repository's
+      // local config. Global, system, and command-scope values can redirect Git
+      // to machine-wide hooks and are not local pipeline wiring.
+      const unsafeGitEnvironment = unsafeGitEnvironmentVariable();
+      let hooksDir = null;
+      let configuredHooksDir = null;
+      let nonLocalHooksPathOrigin = null;
+      let hookPathOutsideRepository = false;
+      let unsafeHooksDirectory = false;
+      if (!unsafeGitEnvironment) {
+        try {
+          hooksDir = execSync(
+            'git',
+            ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'],
+            {
+              cwd: doctorCwd,
+              encoding: 'utf8',
+            },
+          ).trim();
+        } catch {
+          hooksDir = null;
+        }
+        try {
+          const effectiveConfig = execSync(
+            'git',
+            ['config', '--show-origin', '--get', 'core.hooksPath'],
+            {
+              cwd: doctorCwd,
+              encoding: 'utf8',
+            },
+          ).trim();
+          let localConfig = '';
+          try {
+            localConfig = execSync(
+              'git',
+              ['config', '--local', '--show-origin', '--get', 'core.hooksPath'],
+              {
+                cwd: doctorCwd,
+                encoding: 'utf8',
+              },
+            ).trim();
+          } catch {
+            // No repository-local override.
+          }
+          if (effectiveConfig !== localConfig) {
+            nonLocalHooksPathOrigin = effectiveConfig.split('\t', 1)[0];
+          } else if (localConfig) {
+            const configuredPath = execSync(
+              'git',
+              ['config', '--local', '--path', '--get', 'core.hooksPath'],
+              {
+                cwd: doctorCwd,
+                encoding: 'utf8',
+              },
+            ).trim();
+            if (configuredPath) {
+              let hookBase = doctorCwd;
+              try {
+                hookBase = execSync(
+                  'git',
+                  ['rev-parse', '--path-format=absolute', '--show-toplevel'],
+                  { cwd: doctorCwd, encoding: 'utf8' },
+                ).trim();
+              } catch {
+                hookBase = execSync(
+                  'git',
+                  ['rev-parse', '--path-format=absolute', '--absolute-git-dir'],
+                  { cwd: doctorCwd, encoding: 'utf8' },
+                ).trim();
+              }
+              configuredHooksDir = isAbsolute(configuredPath)
+                ? resolvePath(configuredPath)
+                : resolvePath(hookBase, configuredPath);
+            }
+          }
+        } catch {
+          // No effective core.hooksPath; Git's repository-local default is safe.
+        }
+        if (
+          hooksDir &&
+          !nonLocalHooksPathOrigin &&
+          !hookDirIsRepositoryLocal(execSync, doctorCwd, hooksDir)
+        ) {
+          hookPathOutsideRepository = true;
+        }
+        const hooksDirectoryToValidate = configuredHooksDir || hooksDir;
+        if (hooksDirectoryToValidate && !nonLocalHooksPathOrigin) {
+          try {
+            const hookDirStat = fsLstatSync(hooksDirectoryToValidate);
+            unsafeHooksDirectory =
+              hookDirStat.isSymbolicLink() ||
+              !hookDirStat.isDirectory() ||
+              canonicalizePath(hooksDirectoryToValidate) !== canonicalizePath(hooksDir);
+          } catch {
+            unsafeHooksDirectory = true;
+          }
+        }
+      }
+      let hookHealthy = false;
+      if (unsafeGitEnvironment) {
+        note(
+          'hook',
+          'WARN',
+          `unsafe Git environment variable ${unsafeGitEnvironment}; hook validation refused`,
+        );
+      } else if (!hooksDir) {
+        note('hook', 'WARN', 'not a git repository');
+      } else if (nonLocalHooksPathOrigin) {
+        note(
+          'hook',
+          'WARN',
+          `effective core.hooksPath from ${nonLocalHooksPathOrigin} is not repository-local`,
+        );
+      } else if (hookPathOutsideRepository) {
+        note('hook', 'WARN', `hooks path ${hooksDir} is outside repository-owned roots`);
+      } else if (unsafeHooksDirectory) {
+        note('hook', 'WARN', `unsafe hooks directory at ${configuredHooksDir || hooksDir}`);
+      } else {
+        const hookFile = pathJoin(hooksDir, 'post-commit');
+        if (!fsExistsSync(hookFile)) {
+          note('hook', 'WARN', `no post-commit hook at ${hookFile} — run '${cliName} init'`);
+        } else if (
+          (() => {
+            try {
+              const hookStat = fsLstatSync(hookFile);
+              return hookStat.isSymbolicLink() || !hookStat.isFile() || hookStat.nlink !== 1;
+            } catch {
+              return true;
+            }
+          })()
+        ) {
+          note('hook', 'WARN', `unsafe managed hook file at ${hookFile}`);
+        } else if (!hookDirIsRepositoryLocal(execSync, doctorCwd, fsRealpathSync(hookFile))) {
+          note('hook', 'WARN', `managed hook at ${hookFile} is outside repository-owned roots`);
+        } else if (
+          !fsReadFileSync(hookFile, 'utf8')
+            .split(/\r?\n/)
+            .includes('# codex-rca-managed-hook: post-commit')
+        ) {
+          note('hook', 'WARN', `post-commit at ${hookFile} is not a managed RCA hook`);
+        } else {
+          hookHealthy = true;
+          note('hook', 'ok', hookFile);
+        }
+      }
+
+      if (resolvedConfig) {
+        try {
+          const autoCfg = loadConfig({ cwd: doctorCwd, configPath: program.opts().config });
+          if (autoCfg.auto_generate === true) {
+            failures++;
+            const unavailable = [];
+            if (!scannerHealthy) unavailable.push('secret scanner');
+            if (!hookHealthy) unavailable.push('local hook');
+            unavailable.push('provider isolation');
+            note(
+              'auto-gen',
+              'FAIL',
+              `unsafe — ${unavailable.join(', ')} unavailable; automatic provider execution is refused`,
+            );
+          } else {
+            note(
+              'auto-gen',
+              'WARN',
+              'disabled — scanner, local hook, and provider isolation are required; automatic provider execution is unavailable',
+            );
+          }
+        } catch {
+          note('auto-gen', 'WARN', 'config could not be loaded');
+        }
+      }
 
       const maxName = Math.max(...checks.map((c) => c.name.length));
       for (const c of checks) {

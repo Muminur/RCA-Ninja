@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -391,6 +391,28 @@ describe('config CLI command', () => {
     );
     assert.strictEqual(exitCode, 1);
     assert.ok(stderr.includes('Usage'), `expected usage error, got: ${stderr}`);
+  });
+
+  it('refuses legacy provider execution controls as config-set keys', async () => {
+    const rcaDir = mkdtempSync(join(tmpdir(), 'claude-rca-config-cli-fixed-provider-'));
+    const tmp = makeWorkspace(rcaDir);
+    const configPath = join(tmp, '.claude-rca.json');
+    const before = readFileSync(configPath, 'utf8');
+
+    for (const setting of [
+      'claude.binary=attacker-controlled',
+      'claude.permission_mode=bypassPermissions',
+      'claude.allowed_tools=Bash',
+      'codex.binary=attacker-controlled',
+      'codex.sandbox=danger-full-access',
+    ]) {
+      const { stderr, exitCode } = await capture(() =>
+        createProgram().parseAsync(['node', 'rca', '--cwd', tmp, 'config', '--set', setting]),
+      );
+      assert.strictEqual(exitCode, 50, `${setting} must be rejected`);
+      assert.match(stderr, /unknown config key/i);
+      assert.strictEqual(readFileSync(configPath, 'utf8'), before);
+    }
   });
 });
 

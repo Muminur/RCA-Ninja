@@ -4,6 +4,42 @@
 // about a specific LLM CLI's flags and output shape. Everything outside this
 // directory must stay provider-agnostic.
 
+import { isAbsolute } from 'node:path';
+import { RcaError } from '../errors.mjs';
+
+const STARTUP_ENV_KEYS = ['PATH', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT'];
+
+export function buildProviderEnv(providerName, sourceEnv = process.env, workspaceDir) {
+  if (typeof workspaceDir !== 'string' || !isAbsolute(workspaceDir)) {
+    throw new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+  }
+
+  const safeEnv = {};
+  const sourceKeys = Object.keys(sourceEnv ?? {});
+
+  for (const allowedKey of STARTUP_ENV_KEYS) {
+    const sourceKey = sourceKeys.find((key) => key.toLowerCase() === allowedKey.toLowerCase());
+    if (sourceKey !== undefined && sourceEnv[sourceKey] !== undefined) {
+      safeEnv[allowedKey] = sourceEnv[sourceKey];
+    }
+  }
+
+  Object.assign(safeEnv, {
+    HOME: workspaceDir,
+    USERPROFILE: workspaceDir,
+    APPDATA: workspaceDir,
+    LOCALAPPDATA: workspaceDir,
+    TEMP: workspaceDir,
+    TMP: workspaceDir,
+    TMPDIR: workspaceDir,
+  });
+
+  if (providerName === 'codex') safeEnv.CODEX_HOME = workspaceDir;
+  if (providerName === 'claude') safeEnv.CLAUDE_CONFIG_DIR = workspaceDir;
+
+  return safeEnv;
+}
+
 /**
  * Split a configured binary string into a command + fixed prefix args.
  *

@@ -33,7 +33,22 @@ const ERROR_TABLE = {
     exit: 30,
     template: 'ripgrep (rg) is not on PATH. Install: {hint}.',
   },
-  SEARCH_FAILED: { category: 'input', exit: 31, template: 'Search failed: {reason}.' },
+  SEARCH_FAILED: { category: 'input', exit: 34, template: 'Search failed: {reason}.' },
+  SECRET_SCANNER_UNAVAILABLE: {
+    category: 'env',
+    exit: 31,
+    template: 'An approved secret scanner is unavailable; provider execution was refused.',
+  },
+  SECRET_SCAN_FAILED: {
+    category: 'input',
+    exit: 32,
+    template: 'The secret scanner blocked provider execution.',
+  },
+  PROVIDER_ISOLATION_UNAVAILABLE: {
+    category: 'env',
+    exit: 33,
+    template: 'No approved isolated provider broker is available; provider execution was refused.',
+  },
   NOT_FOUND: { category: 'input', exit: 40, template: 'RCA not found: {id}.' },
   FORBIDDEN_PATH: {
     category: 'input',

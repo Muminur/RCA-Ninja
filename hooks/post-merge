@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
+# codex-rca-managed-hook: post-merge
 # codex-rca / claude-rca post-merge hook — analyses the commits a merge or pull
 # just brought in.
 #
-# Why this exists: post-commit only ever sees commits created locally. When the
+# Why this exists: post-commit only ever sees commits created locally. When a
 # project merges through GitHub, every merge is a squash merge performed on the
 # server, so the commit that actually lands on the default branch never passes
 # through a local hook — and the branch commits it replaced are deleted, taking
@@ -11,7 +12,7 @@
 #
 # ORIG_HEAD is where the branch was before the merge, so ORIG_HEAD..HEAD is
 # exactly what the merge introduced. `generate --since` skips commits that
-# already have an RCA, so a replayed range costs nothing.
+# already have an RCA, so replaying a range costs nothing.
 
 set -eu
 
@@ -23,6 +24,12 @@ REF="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 log() {
   echo "[${TIMESTAMP}] [${1}] ref=${REF} ${2}" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+# Surface problems in the git output — a log file nobody reads is how a broken
+# RCA pipeline stays broken for days.
+warn() {
+  printf '%s: %s\n' "${RCA_BIN:-rca}" "${1}" >&2 || true
 }
 
 RCA_BIN="${RCA_BIN:-}"
@@ -39,8 +46,23 @@ if ! command -v "${RCA_BIN}" >/dev/null 2>&1; then
   exit 0
 fi
 
+# Distinguish "config could not be resolved" (a fault) from "auto_generate is
+# off" (a choice). This hook may be installed globally, so it also runs in repos
+# that never used the RCA CLI; only shout when the repo shows evidence that it did.
+CFG_PATH="$("${RCA_BIN}" config --path 2>/dev/null || true)"
+if [ -z "${CFG_PATH}" ]; then
+  MAIN_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo .)")"
+  if [ -d "${MAIN_ROOT}/rca" ]; then
+    log "ERROR" "no config resolved from $(pwd) but ${MAIN_ROOT}/rca exists — RCA generation is OFF for this repo"
+    warn "no .claude-rca.json resolved from $(pwd) — merged commits got NO RCA. Run '${RCA_BIN} init' or '${RCA_BIN} doctor'."
+  else
+    log "INFO" "skipped: RCA CLI not configured for this repo"
+  fi
+  exit 0
+fi
+
 if ! "${RCA_BIN}" config --get auto_generate 2>/dev/null | grep -qx true; then
-  log "INFO" "skipped: auto_generate is not true"
+  log "INFO" "skipped: auto_generate is not true in ${CFG_PATH}"
   exit 0
 fi
 
@@ -57,14 +79,24 @@ if [ -z "${SINCE}" ]; then
   exit 0
 fi
 
+# Nothing arrived (a pull that was already up to date) — don't spawn anything.
+if [ "${SINCE}" = "$(git rev-parse HEAD 2>/dev/null || echo '')" ]; then
+  log "INFO" "skipped: merge introduced no new commits"
+  exit 0
+fi
+
 # --max bounds a first pull after install, which could otherwise queue dozens
 # of provider calls in one go. Re-running the hook picks up the remainder.
 MAX_COMMITS="${RCA_POST_MERGE_MAX:-10}"
 
-log "INFO" "merge detected, generating RCAs for ${SINCE}..HEAD"
+log "INFO" "merge detected, generating RCAs for ${SINCE}..HEAD (config: ${CFG_PATH})"
 
 (
   GEN_LOG="$("${RCA_BIN}" config --get log.file 2>/dev/null || echo "${LOG_FILE}")"
+  # An unset key must never become a filename literally called "undefined".
+  case "${GEN_LOG}" in
+    undefined | "") GEN_LOG="${LOG_FILE}" ;;
+  esac
   OUTPUT_DIR="$("${RCA_BIN}" config --get output_dir 2>/dev/null || echo rca)"
   if "${RCA_BIN}" generate --since "${SINCE}" --max "${MAX_COMMITS}" >>"${GEN_LOG}" 2>&1; then
     log "INFO" "post-merge generation finished"

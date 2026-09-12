@@ -1,15 +1,26 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { amendRca } from '../../src/amend.mjs';
-import { scanForSecrets } from '../../src/generator.mjs';
+import {
+  installGitleaksStub,
+  scannerReceiptMarker,
+  scannerRejectPayload,
+} from '../fixtures/gitleaks-test-env.mjs';
 
-/** Minimal context object satisfying renderer.mjs requirements */
-function makeFakeContext(overrides = {}) {
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-amend-bootstrap-'));
+process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+const { amendRca } = await import('../../src/amend.mjs');
+process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
+
+function makeContext(overrides = {}) {
   return {
+    repo_root: REPO_ROOT,
     short_hash: 'abc1234',
     branch: 'main',
     timestamp_utc: '2026-01-01T00:00:00Z',
@@ -22,28 +33,8 @@ function makeFakeContext(overrides = {}) {
   };
 }
 
-/** Minimal RCA object satisfying renderer.mjs requirements */
-function makeFakeRca(overrides = {}) {
-  return {
-    title: 'Test RCA',
-    symptom: 'Something broke',
-    root_cause: 'A bug',
-    fix: 'Fixed the bug',
-    impact: 'Minor',
-    references: [],
-    files: ['src/foo.mjs'],
-    tags: ['test', 'bugfix'],
-    confidence: 'high',
-    code_changes: [],
-    description: '',
-    components: [],
-    ...overrides,
-  };
-}
-
-/** Write a fake RCA .md file with YAML frontmatter into dir */
 function writeFakeRcaFile(dir, filename, frontmatterFields = {}) {
-  const fm = {
+  const frontmatter = {
     title: '"Test RCA"',
     date: '2026-01-01T00:00:00Z',
     ref: 'abc1234',
@@ -53,18 +44,25 @@ function writeFakeRcaFile(dir, filename, frontmatterFields = {}) {
     tags: ['test', 'bugfix'],
     ...frontmatterFields,
   };
-  const lines = Object.entries(fm).map(([k, v]) => {
-    if (Array.isArray(v)) return `${k}: [${v.join(', ')}]`;
-    return `${k}: ${v}`;
-  });
-  const content = `---\n${lines.join('\n')}\n---\n\n## Symptom\n\nSomething broke.\n`;
-  writeFileSync(join(dir, filename), content, 'utf8');
-  return join(dir, filename);
+  const lines = Object.entries(frontmatter).map(([key, value]) =>
+    Array.isArray(value) ? `${key}: [${value.join(', ')}]` : `${key}: ${value}`,
+  );
+  const path = join(dir, filename);
+  writeFileSync(path, `---\n${lines.join('\n')}\n---\n\n## Symptom\n\nSomething broke.\n`, 'utf8');
+  return path;
 }
 
-describe('amendRca', () => {
+function writeTemplates(dir, systemPrompt) {
+  const systemPromptPath = join(dir, 'system-prompt.txt');
+  const schemaPath = join(dir, 'schema.json');
+  writeFileSync(systemPromptPath, systemPrompt, 'utf8');
+  writeFileSync(schemaPath, JSON.stringify({ type: 'object' }), 'utf8');
+  return { systemPromptPath, schemaPath };
+}
+
+describe('amendRca fail-closed generation boundary', () => {
   it('throws NOT_FOUND when outputDir does not exist', async () => {
-    const nonExistentDir = join(tmpdir(), 'claude-rca-amend-nodir-' + Date.now());
+    const nonExistentDir = join(tmpdir(), `claude-rca-amend-nodir-${Date.now()}`);
     await assert.rejects(
       () =>
         amendRca({
@@ -76,50 +74,13 @@ describe('amendRca', () => {
           systemPromptPath: 'prompts/rca-system.md',
           schemaPath: 'prompts/rca-schema.json',
         }),
-      (err) => {
-        assert.strictEqual(err.code, 'NOT_FOUND');
-        return true;
-      },
+      (error) => error.code === 'NOT_FOUND',
     );
   });
 
-  it('finds RCA file in subdirectory', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-subdir-'));
-    try {
-      const subDir = join(dir, '2026', '04');
-      mkdirSync(subDir, { recursive: true });
-      writeFakeRcaFile(subDir, 'RCA-2026-04-01-abc5678-sub-fix.md');
-
-      const fakegen = async () => ({
-        rca: makeFakeRca(),
-        cost: 0,
-        sessionId: 'fake',
-        autoFilled: [],
-      });
-
-      const result = await amendRca({
-        id: 'abc5678',
-        correctionHint: 'fix the subdirectory file',
-        outputDir: dir,
-        cwd: dir,
-        config: {},
-        systemPromptPath: 'prompts/rca-system.md',
-        schemaPath: 'prompts/rca-schema.json',
-        _generateFn: fakegen,
-        _buildContextFn: async () => makeFakeContext(),
-        _rebuildManifestFn: async () => {},
-      });
-
-      assert.ok(result.path.includes('RCA-2026-04-01-abc5678-sub-fix.md'));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('throws NOT_FOUND when id does not match any file', async () => {
+  it('throws NOT_FOUND when no RCA matches the requested id', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-notfound-'));
     try {
-      // No RCA files in dir — only the manifest placeholder
       await assert.rejects(
         () =>
           amendRca({
@@ -131,257 +92,231 @@ describe('amendRca', () => {
             systemPromptPath: 'prompts/rca-system.md',
             schemaPath: 'prompts/rca-schema.json',
           }),
-        (err) => {
-          assert.strictEqual(err.code, 'NOT_FOUND');
+        (error) => error.code === 'NOT_FOUND',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores an injected generator and sends amend inputs through the central scanner', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-isolation-'));
+    const receiptPath = join(dir, 'scanner-receipt.json');
+    const target = writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
+    const originalContent = readFileSync(target, 'utf8');
+    const { systemPromptPath, schemaPath } = writeTemplates(
+      dir,
+      `safe prompt ${scannerReceiptMarker(receiptPath)}`,
+    );
+    const priorRcas = [{ title: 'existing RCA' }];
+    let injectedCalls = 0;
+    let rebuildCalls = 0;
+
+    try {
+      await assert.rejects(
+        () =>
+          amendRca({
+            id: 'abc1234',
+            correctionHint: 'preserve the exact causal chain',
+            outputDir: dir,
+            cwd: dir,
+            config: {},
+            systemPromptPath,
+            schemaPath,
+            _buildContextFn: async () => makeContext(),
+            _readPriorRcasFn: () => priorRcas,
+            _rebuildManifestFn: async () => {
+              rebuildCalls += 1;
+            },
+            _generateFn: async () => {
+              injectedCalls += 1;
+              return { rca: { title: 'injected bypass' } };
+            },
+          }),
+        (error) => {
+          assert.strictEqual(error.code, 'PROVIDER_ISOLATION_UNAVAILABLE');
+          assert.strictEqual(
+            error.message,
+            'No approved isolated provider broker is available; provider execution was refused.',
+          );
           return true;
         },
       );
+
+      assert.strictEqual(injectedCalls, 0);
+      assert.strictEqual(rebuildCalls, 0);
+      assert.strictEqual(readFileSync(target, 'utf8'), originalContent);
+      const payload = JSON.parse(readFileSync(receiptPath, 'utf8'));
+      assert.strictEqual(payload.correctionHint, 'preserve the exact causal chain');
+      assert.deepStrictEqual(payload.priorRcas, priorRcas);
+      assert.strictEqual(payload.context.diff, makeContext().diff);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('resolves matching file by basename substring', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-match-'));
+  it('rethrows a static scanner failure without modifying the existing RCA', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-scanner-reject-'));
+    const target = writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
+    const originalContent = readFileSync(target, 'utf8');
+    const { systemPromptPath, schemaPath } = writeTemplates(dir, scannerRejectPayload());
+
     try {
-      writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
-
-      let _capturedArgs;
-      const fakegen = async (args) => {
-        _capturedArgs = args;
-        return { rca: makeFakeRca(), cost: 0, sessionId: 'fake', autoFilled: [] };
-      };
-
-      const result = await amendRca({
-        id: 'abc1234',
-        correctionHint: 'the hint',
-        outputDir: dir,
-        cwd: dir,
-        config: {},
-        systemPromptPath: 'prompts/rca-system.md',
-        schemaPath: 'prompts/rca-schema.json',
-        _generateFn: fakegen,
-        _buildContextFn: async () => makeFakeContext(),
-        _rebuildManifestFn: async () => {},
-      });
-
-      assert.ok(result.path.includes('RCA-2026-01-01-abc1234-test-fix.md'));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('calls _generateFn with correctionHint', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-hint-'));
-    try {
-      writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
-
-      let capturedArgs;
-      const fakegen = async (args) => {
-        capturedArgs = args;
-        return { rca: makeFakeRca(), cost: 0, sessionId: 'fake', autoFilled: [] };
-      };
-
-      await amendRca({
-        id: 'abc1234',
-        correctionHint: 'please fix the severity level',
-        outputDir: dir,
-        cwd: dir,
-        config: {},
-        systemPromptPath: 'prompts/rca-system.md',
-        schemaPath: 'prompts/rca-schema.json',
-        _generateFn: fakegen,
-        _buildContextFn: async () => makeFakeContext(),
-        _rebuildManifestFn: async () => {},
-      });
-
-      assert.ok(capturedArgs, '_generateFn should have been called');
-      assert.strictEqual(capturedArgs.correctionHint, 'please fix the severity level');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('overwrites the RCA file in place', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-overwrite-'));
-    try {
-      const filePath = writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
-      const originalContent = readFileSync(filePath, 'utf8');
-
-      const fakegen = async () => ({
-        rca: makeFakeRca({ title: 'Amended RCA Title' }),
-        cost: 0,
-        sessionId: 'fake',
-        autoFilled: [],
-      });
-
-      await amendRca({
-        id: 'abc1234',
-        correctionHint: 'amend this',
-        outputDir: dir,
-        cwd: dir,
-        config: {},
-        systemPromptPath: 'prompts/rca-system.md',
-        schemaPath: 'prompts/rca-schema.json',
-        _generateFn: fakegen,
-        _buildContextFn: async () => makeFakeContext(),
-        _rebuildManifestFn: async () => {},
-      });
-
-      const newContent = readFileSync(filePath, 'utf8');
-      assert.notStrictEqual(newContent, originalContent, 'file should have been overwritten');
-      assert.ok(newContent.includes('Amended RCA Title'), 'new content should reflect amended rca');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('calls rebuildManifest after writing', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-rebuild-'));
-    try {
-      writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
-
-      let rebuildCalled = false;
-      const fakeRebuild = async () => {
-        rebuildCalled = true;
-      };
-
-      await amendRca({
-        id: 'abc1234',
-        correctionHint: 'fix',
-        outputDir: dir,
-        cwd: dir,
-        config: {},
-        systemPromptPath: 'prompts/rca-system.md',
-        schemaPath: 'prompts/rca-schema.json',
-        _generateFn: async () => ({
-          rca: makeFakeRca(),
-          cost: 0,
-          sessionId: 'fake',
-          autoFilled: [],
-        }),
-        _buildContextFn: async () => makeFakeContext(),
-        _rebuildManifestFn: fakeRebuild,
-      });
-
-      assert.strictEqual(rebuildCalled, true, 'rebuildManifest should have been called');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('returns { path } of the amended file', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-return-'));
-    try {
-      writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
-
-      const result = await amendRca({
-        id: 'abc1234',
-        correctionHint: 'fix',
-        outputDir: dir,
-        cwd: dir,
-        config: {},
-        systemPromptPath: 'prompts/rca-system.md',
-        schemaPath: 'prompts/rca-schema.json',
-        _generateFn: async () => ({
-          rca: makeFakeRca(),
-          cost: 0,
-          sessionId: 'fake',
-          autoFilled: [],
-        }),
-        _buildContextFn: async () => makeFakeContext(),
-        _rebuildManifestFn: async () => {},
-      });
-
-      assert.ok('path' in result, 'result should have a path property');
-      assert.ok(result.path.endsWith('.md'), 'path should be a .md file');
-      assert.ok(result.path.includes(dir), 'path should be under outputDir');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('passes priorRcas from _readPriorRcasFn to _generateFn', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-priorrcas-'));
-    try {
-      writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
-
-      const fakePriorRcas = [
-        {
-          title: 'Old bug',
-          root_cause: 'A prior cause',
-          date: '2025-01-01',
-          files: ['src/foo.mjs'],
+      await assert.rejects(
+        () =>
+          amendRca({
+            id: 'abc1234',
+            correctionHint: 'private hint must not be sent',
+            outputDir: dir,
+            cwd: dir,
+            config: {},
+            systemPromptPath,
+            schemaPath,
+            _buildContextFn: async () => makeContext(),
+          }),
+        (error) => {
+          assert.strictEqual(error.code, 'SECRET_SCAN_FAILED');
+          assert.strictEqual(error.message, 'The secret scanner blocked provider execution.');
+          assert.ok(!error.message.includes('private hint'));
+          return true;
         },
-      ];
-
-      let capturedGenerateArgs;
-      const fakegen = async (args) => {
-        capturedGenerateArgs = args;
-        return { rca: makeFakeRca(), cost: 0, sessionId: 'fake', autoFilled: [] };
-      };
-
-      let readPriorRcasCalledWith;
-      const fakeReadPriorRcas = (opts) => {
-        readPriorRcasCalledWith = opts;
-        return fakePriorRcas;
-      };
-
-      await amendRca({
-        id: 'abc1234',
-        correctionHint: 'fix',
-        outputDir: dir,
-        cwd: dir,
-        config: {},
-        systemPromptPath: 'prompts/rca-system.md',
-        schemaPath: 'prompts/rca-schema.json',
-        _generateFn: fakegen,
-        _buildContextFn: async () => makeFakeContext({ files_changed: ['src/foo.mjs'] }),
-        _rebuildManifestFn: async () => {},
-        _readPriorRcasFn: fakeReadPriorRcas,
-      });
-
-      assert.ok(readPriorRcasCalledWith, '_readPriorRcasFn should have been called');
-      assert.strictEqual(readPriorRcasCalledWith.outputDir, dir, 'outputDir passed correctly');
-      assert.deepStrictEqual(
-        readPriorRcasCalledWith.filesChanged,
-        ['src/foo.mjs'],
-        'filesChanged from context passed correctly',
       );
-      assert.ok(capturedGenerateArgs, '_generateFn should have been called');
-      assert.deepStrictEqual(
-        capturedGenerateArgs.priorRcas,
-        fakePriorRcas,
-        'priorRcas should be passed from _readPriorRcasFn to _generateFn',
+      assert.strictEqual(readFileSync(target, 'utf8'), originalContent);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('finds an RCA file below the output directory before enforcing the scanner gate', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-subdir-'));
+    try {
+      const subDir = join(dir, '2026', '04');
+      mkdirSync(subDir, { recursive: true });
+      writeFakeRcaFile(subDir, 'RCA-2026-04-01-abc5678-sub-fix.md');
+      const { systemPromptPath, schemaPath } = writeTemplates(dir, 'safe prompt');
+
+      await assert.rejects(
+        () =>
+          amendRca({
+            id: 'abc5678',
+            correctionHint: 'fix the subdirectory file',
+            outputDir: dir,
+            cwd: dir,
+            config: {},
+            systemPromptPath,
+            schemaPath,
+            _buildContextFn: async () => makeContext(),
+          }),
+        (error) => error.code === 'PROVIDER_ISOLATION_UNAVAILABLE',
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
-});
 
-describe('scanForSecrets', () => {
-  it('catches api_key = value patterns', () => {
-    assert.strictEqual(scanForSecrets('api_key: "abcdef1234567890"'), true);
-  });
+  it('keeps successful persistence covered through an isolated child-process generator fixture', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-amend-child-fixture-'));
+    const target = writeFakeRcaFile(dir, 'RCA-2026-01-01-abc1234-test-fix.md');
+    const originalContent = readFileSync(target, 'utf8');
+    const { systemPromptPath, schemaPath } = writeTemplates(dir, 'safe prompt');
+    const entryPath = join(dir, 'amend-entry.mjs');
+    const loaderPath = join(dir, 'generator-loader.mjs');
+    const fakeGeneratorPath = join(dir, 'fake-generator.mjs');
+    const capturePath = join(dir, 'generator-args.json');
+    const rebuildPath = join(dir, 'manifest-rebuilt.txt');
+    const context = makeContext();
+    const priorRcas = [{ title: 'existing RCA' }];
+    const fakeRca = {
+      title: 'Child fixture RCA',
+      symptom: 'A test failed',
+      root_cause: 'A missing boundary',
+      fix: 'Added a boundary',
+      impact: 'Test-only',
+      references: [],
+      files: ['src/foo.mjs'],
+      tags: ['test'],
+      confidence: 'high',
+      code_changes: [],
+      description: '',
+      components: [],
+    };
 
-  it('catches AWS access key format (AKIA...)', () => {
-    assert.strictEqual(scanForSecrets('+AKIAIOSFODNN7EXAMPLE'), true);
-  });
+    try {
+      writeFileSync(
+        fakeGeneratorPath,
+        [
+          "import { writeFileSync } from 'node:fs';",
+          'export async function generate(args) {',
+          '  writeFileSync(process.env.RCA_NINJA_GENERATOR_CAPTURE, JSON.stringify(args));',
+          '  return { rca: ' + JSON.stringify(fakeRca) + ' };',
+          '}',
+        ].join('\n'),
+        'utf8',
+      );
+      writeFileSync(
+        loaderPath,
+        [
+          'const target = process.env.RCA_NINJA_GENERATOR_TARGET;',
+          'const replacement = process.env.RCA_NINJA_GENERATOR_FIXTURE;',
+          'export async function resolve(specifier, context, nextResolve) {',
+          '  const candidate = context.parentURL ? new URL(specifier, context.parentURL).href : specifier;',
+          '  if (candidate === target) return { url: replacement, shortCircuit: true };',
+          '  return nextResolve(specifier, context);',
+          '}',
+        ].join('\n'),
+        'utf8',
+      );
+      const amendUrl = pathToFileURL(join(REPO_ROOT, 'src', 'amend.mjs')).href;
+      const generatorUrl = pathToFileURL(join(REPO_ROOT, 'src', 'generator.mjs')).href;
+      writeFileSync(
+        entryPath,
+        [
+          "import { writeFileSync } from 'node:fs';",
+          'import { amendRca } from ' + JSON.stringify(amendUrl) + ';',
+          'const result = await amendRca({',
+          "  id: 'abc1234',",
+          "  correctionHint: 'preserve the exact causal chain',",
+          '  outputDir: ' + JSON.stringify(dir) + ',',
+          '  cwd: ' + JSON.stringify(dir) + ',',
+          '  config: {},',
+          '  systemPromptPath: ' + JSON.stringify(systemPromptPath) + ',',
+          '  schemaPath: ' + JSON.stringify(schemaPath) + ',',
+          '  _buildContextFn: async () => (' + JSON.stringify(context) + '),',
+          '  _readPriorRcasFn: () => (' + JSON.stringify(priorRcas) + '),',
+          "  _rebuildManifestFn: async () => writeFileSync(process.env.RCA_NINJA_REBUILD_MARKER, 'rebuilt'),",
+          '});',
+          'process.stdout.write(JSON.stringify(result));',
+        ].join('\n'),
+        'utf8',
+      );
 
-  it('catches Stripe-style sk_live_ keys', () => {
-    // Split to avoid triggering secret scanners on the test file itself
-    const fakeStripeKey = 'sk_live_' + 'abc123def456ghi789jkl012';
-    assert.strictEqual(scanForSecrets(fakeStripeKey), true);
-  });
+      const result = spawnSync(
+        process.execPath,
+        ['--experimental-loader', pathToFileURL(loaderPath).href, entryPath],
+        {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            RCA_NINJA_GENERATOR_CAPTURE: capturePath,
+            RCA_NINJA_GENERATOR_FIXTURE: pathToFileURL(fakeGeneratorPath).href,
+            RCA_NINJA_GENERATOR_TARGET: generatorUrl,
+            RCA_NINJA_REBUILD_MARKER: rebuildPath,
+          },
+        },
+      );
 
-  it('catches JWT Bearer tokens', () => {
-    // Split to avoid triggering secret scanners on the test file itself
-    const fakeJwt = 'Authorization: Bearer ' + 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
-    assert.strictEqual(scanForSecrets(fakeJwt), true);
-  });
-
-  it('does not flag normal diff content', () => {
-    assert.strictEqual(scanForSecrets('const x = 1;\n+const y = 2;'), false);
+      assert.strictEqual(result.status, 0, result.stdout + '\n' + result.stderr);
+      assert.deepStrictEqual(JSON.parse(result.stdout), { path: target });
+      assert.ok(readFileSync(target, 'utf8').includes('Child fixture RCA'));
+      assert.notStrictEqual(readFileSync(target, 'utf8'), originalContent);
+      assert.strictEqual(readFileSync(rebuildPath, 'utf8'), 'rebuilt');
+      const captured = JSON.parse(readFileSync(capturePath, 'utf8'));
+      assert.strictEqual(captured.correctionHint, 'preserve the exact causal chain');
+      assert.deepStrictEqual(captured.priorRcas, priorRcas);
+      assert.deepStrictEqual(captured.context, context);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

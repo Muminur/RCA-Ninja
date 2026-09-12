@@ -1,12 +1,30 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { createProgram } from '../../src/cli.mjs';
-import { handleTool } from '../../src/mcp-server.mjs';
+import { join } from 'node:path';
+import { RcaError } from '../../src/errors.mjs';
+import { installGitleaksStub, scannerRejectPayload } from '../fixtures/gitleaks-test-env.mjs';
 
 const EXIT_SENTINEL = Symbol('mock-exit');
+const scannerBootstrapDir = mkdtempSync(join(tmpdir(), 'rca-mcp-bootstrap-'));
+process.env.PATH = installGitleaksStub(scannerBootstrapDir);
+const { createProgram } = await import('../../src/cli.mjs');
+// Imported dynamically, after the stub is on PATH: a static import would load
+// the scanner before installGitleaksStub() runs.
+const { dispatchToolRequest } = await import('../../src/mcp-server.mjs');
+
+// handleTool is internal now; dispatchToolRequest is the exported entry point.
+const handleTool = (name, args, cfg) => dispatchToolRequest({ name, args, cfg });
+
+/** dispatchToolRequest never throws — it returns a sanitised error result. */
+function assertRefused(result, message) {
+  assert.strictEqual(result.isError, true, message);
+  const text = result.content.map((entry) => entry.text).join('\n');
+  assert.match(text, /not found|forbidden|outside|escapes/i, message);
+  return text;
+}
+process.once('exit', () => rmSync(scannerBootstrapDir, { recursive: true, force: true }));
 
 async function captureStdout(fn) {
   const chunks = [];
@@ -40,6 +58,105 @@ describe('mcp-server module', () => {
   it('exports startMcpServer as a function', async () => {
     const mod = await import('../../src/mcp-server.mjs');
     assert.strictEqual(typeof mod.startMcpServer, 'function');
+  });
+
+  it('returns a static error when central generation rejects a scanner payload', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-mcp-scanner-'));
+    try {
+      const { dispatchToolRequest } = await import('../../src/mcp-server.mjs');
+      assert.strictEqual(typeof dispatchToolRequest, 'function');
+
+      const result = await dispatchToolRequest({
+        name: 'rca_generate',
+        args: { cwd: dir, ref: 'HEAD' },
+        cfg: { output_dir: join(dir, 'rca') },
+        dependencies: {
+          buildContext: async () => ({
+            repo_root: dir,
+            short_hash: 'abc1234',
+            branch: 'main',
+            commit_message: 'fix: scanner rejection',
+            files_changed: ['src/example.mjs'],
+            diff: scannerRejectPayload(),
+            logs: null,
+            timestamp_utc: '2026-08-05T00:00:00.000Z',
+          }),
+        },
+      });
+
+      const text = result.content.map((entry) => entry.text).join('\n');
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(text, 'Error: The secret scanner blocked provider execution.');
+      assert.doesNotMatch(text, /sensitive diagnostics/i);
+      assert.doesNotMatch(text, /SCANNER_REJECT/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores an injected generator and keeps MCP generation behind the central gate', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'claude-rca-mcp-generator-bypass-'));
+    let injectedCalls = 0;
+    try {
+      const { dispatchToolRequest } = await import('../../src/mcp-server.mjs');
+      const result = await dispatchToolRequest({
+        name: 'rca_generate',
+        args: { cwd: dir, ref: 'HEAD' },
+        cfg: { output_dir: join(dir, 'rca') },
+        dependencies: {
+          buildContext: async () => ({
+            repo_root: dir,
+            short_hash: 'abc1234',
+            branch: 'main',
+            commit_message: 'fix: central generation gate',
+            files_changed: ['src/example.mjs'],
+            diff: 'safe diff',
+            logs: null,
+            timestamp_utc: '2026-08-05T00:00:00.000Z',
+          }),
+          generate: async () => {
+            injectedCalls += 1;
+            const error = new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+            error.message = 'private injected generator diagnostic';
+            throw error;
+          },
+        },
+      });
+
+      const text = result.content.map((entry) => entry.text).join('\n');
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(
+        text,
+        'Error: No approved isolated provider broker is available; provider execution was refused.',
+      );
+      assert.strictEqual(injectedCalls, 0);
+      assert.doesNotMatch(text, /private injected generator diagnostic/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts forged provider safety errors from retained non-generation test support', async () => {
+    const { dispatchToolRequest } = await import('../../src/mcp-server.mjs');
+    const error = new RcaError('PROVIDER_ISOLATION_UNAVAILABLE');
+    error.message = 'private build-context diagnostic';
+    const result = await dispatchToolRequest({
+      name: 'rca_generate',
+      cfg: { output_dir: join(tmpdir(), 'unused-rca-output') },
+      dependencies: {
+        buildContext: async () => {
+          throw error;
+        },
+      },
+    });
+
+    const text = result.content.map((entry) => entry.text).join('\n');
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(
+      text,
+      'Error: No approved isolated provider broker is available; provider execution was refused.',
+    );
+    assert.doesNotMatch(text, /private build-context diagnostic/i);
   });
 });
 
@@ -213,18 +330,14 @@ describe('mcp-server path containment', () => {
   const cfg = () => ({ output_dir: rcaDir, obsidian: {} });
 
   it('rca_show refuses a bare cwd-relative filename such as .env', async () => {
-    await assert.rejects(
-      () => handleTool('rca_show', { id: '.env' }, cfg()),
-      (err) => err.code === 'NOT_FOUND' || err.code === 'FORBIDDEN_PATH',
-      'rca_show must not read .env from the working directory',
-    );
+    const result = await handleTool('rca_show', { id: '.env' }, cfg());
+    const text = assertRefused(result, 'rca_show must not read .env from the working directory');
+    assert.ok(!text.includes(SECRET), 'refusal must not leak the file contents');
   });
 
   it('rca_show refuses a parent-directory traversal', async () => {
-    await assert.rejects(
-      () => handleTool('rca_show', { id: '../../../../etc/passwd' }, cfg()),
-      (err) => err.code === 'NOT_FOUND' || err.code === 'FORBIDDEN_PATH',
-    );
+    const result = await handleTool('rca_show', { id: '../../../../etc/passwd' }, cfg());
+    assertRefused(result, 'rca_show must not escape output_dir');
   });
 
   it('rca_show still resolves a legitimate RCA by basename', async () => {
@@ -238,10 +351,8 @@ describe('mcp-server path containment', () => {
   });
 
   it('rca_sync_to_vault refuses a path outside output_dir', async () => {
-    await assert.rejects(
-      () => handleTool('rca_sync_to_vault', { rca_path: join(tmp, '.env') }, cfg()),
-      (err) => err.code === 'FORBIDDEN_PATH',
-    );
+    const result = await handleTool('rca_sync_to_vault', { rca_path: join(tmp, '.env') }, cfg());
+    assertRefused(result, 'rca_sync_to_vault must not escape output_dir');
   });
 
   it('no containment failure ever returns the secret', async () => {

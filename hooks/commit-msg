@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# codex-rca-managed-hook: commit-msg
 # claude-rca commit-msg hook — rejects commit messages that do not match
 # Conventional Commits (https://www.conventionalcommits.org/).
 #

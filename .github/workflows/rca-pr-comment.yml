@@ -7,6 +7,11 @@ on:
 jobs:
   rca-check:
     runs-on: ubuntu-latest
+    # The default GITHUB_TOKEN is read-only here, so posting the summary
+    # comment fails with 403 and takes the job down with it.
+    permissions:
+      contents: read
+      pull-requests: write
     if: contains(github.event.pull_request.title, 'fix') || contains(github.event.pull_request.title, 'Fix')
     steps:
       - uses: actions/checkout@v4
@@ -17,10 +22,14 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install claude-rca
+      # Install from this checkout, not the npm registry: the package is not
+      # published, so `npm install -g claude-rca` fails with a 404 and takes
+      # the whole job down with it.
+      - name: Install the RCA CLI from source
         run: |
-          npm install -g claude-rca
-          claude-rca doctor || true
+          npm ci
+          npm link
+          codex-rca doctor || true
 
       - name: Check for related RCAs
         run: |
@@ -30,7 +39,7 @@ jobs:
 
           # Search for related RCAs if rca/ exists
           if [ -d rca ]; then
-            claude-rca search "$(echo $CHANGED_FILES | head -1)" --json 2>/dev/null || echo "[]"
+            codex-rca search "$(echo $CHANGED_FILES | head -1)" --json 2>/dev/null || echo "[]"
           fi
 
       - name: Comment on PR
@@ -42,12 +51,13 @@ jobs:
 
             This PR contains bug-fix changes. After merging, run:
             \`\`\`bash
-            claude-rca generate
+            codex-rca generate
             \`\`\`
 
             To auto-generate RCAs on every fix commit, enable the post-commit hook:
             \`\`\`bash
-            claude-rca config --set auto_generate=true
+            codex-rca init
+            codex-rca config --set auto_generate=true
             \`\`\``;
 
             github.rest.issues.createComment({

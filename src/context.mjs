@@ -341,9 +341,13 @@ function deletedLinesByFile(diff) {
   if (!diff) return byFile;
 
   for (const section of diff.split(/(?=^diff --git )/m)) {
-    const pathMatch = /^\+\+\+ b\/(.+)$/m.exec(section);
-    if (!pathMatch) continue;
-    const file = pathMatch[1].trim();
+    // A wholesale deletion is "+++ /dev/null", and it is exactly the case whose
+    // lines matter most, so fall back to the pre-image path.
+    const post = /^\+\+\+ (?:b\/)?(.+)$/m.exec(section);
+    const pre = /^--- (?:a\/)?(.+)$/m.exec(section);
+    const postPath = post ? post[1].trim() : '';
+    const prePath = pre ? pre[1].trim() : '';
+    const file = postPath && postPath !== '/dev/null' ? postPath : prePath;
     if (!file || file === '/dev/null') continue;
 
     const lines = [];

@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
+# codex-rca-managed-hook: post-commit
 # codex-rca / claude-rca post-commit hook — asks the RCA CLI to analyse the
-# commit that was just created.
+# commit that was just created, when the user has enabled auto_generate.
 #
-# The hook no longer decides what counts as an RCA-worthy commit. That lived
-# here as a `case` on the subject line and again in the CLI, and the two could
-# drift; worse, a subject-only match skips `feat:` commits whose body closes a
-# reported issue. `generate --if-triggered` now owns the decision and honours
+# The hook does not decide what counts as an RCA-worthy commit. That rule lived
+# here as a `case` on the subject AND again in the CLI, and the two could drift;
+# worse, a subject-only match skips a `feat:` commit whose body closes a
+# reported issue. `generate --if-triggered` owns the decision now and honours
 # the `triggers` config block (default: `fix:` plus any closing keyword).
+#
+# Design rule: a commit the config asks for that produces no RCA must be LOUD.
+# Silence is only acceptable when the user deliberately turned auto_generate off.
 
 set -eu
 
@@ -16,9 +20,17 @@ mkdir -p "${LOG_DIR}" 2>/dev/null || LOG_DIR="${TMPDIR:-/tmp}"
 LOG_FILE="${LOG_DIR}/hook.log"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%s)"
 REF="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+MSG="$(git log -1 --pretty=%s 2>/dev/null || echo unknown)"
+MSG_FULL="$(git log -1 --pretty=%B 2>/dev/null || echo unknown)"
 
 log() {
   echo "[${TIMESTAMP}] [${1}] ref=${REF} ${2}" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+# Surface problems in the git commit output — a log file nobody reads is how
+# a broken RCA pipeline stays broken for days.
+warn() {
+  printf '%s: %s\n' "${RCA_BIN:-rca}" "${1}" >&2 || true
 }
 
 RCA_BIN="${RCA_BIN:-}"
@@ -30,24 +42,61 @@ if [ -z "${RCA_BIN}" ]; then
   fi
 fi
 
-# Bail if the RCA CLI isn't installed — but LOG the failure.
+# Cheap pre-filter so an ordinary commit never pays for a node process, and so
+# the log stays readable. This is deliberately a SUPERSET of what the CLI will
+# accept, never a second copy of the rule: every configurable type still has to
+# appear as "<type>:" or "<type>(scope):", and the only other way to trigger is
+# a closing keyword in the body. `generate --if-triggered` makes the real call,
+# using triggers.commit_types (default: fix:).
+if ! printf '%s' "${MSG}" | grep -qE '^[A-Za-z][A-Za-z0-9_.-]*(\([^)]*\))?!?:[[:space:]]' &&
+  ! printf '%s' "${MSG_FULL}" |
+    grep -qiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+'; then
+  log "INFO" "skipped: commit message is not an RCA candidate"
+  exit 0
+fi
+
+# Bail if the RCA CLI isn't installed — but LOG and WARN, since a candidate
+# commit is silently losing its RCA.
 if ! command -v "${RCA_BIN}" >/dev/null 2>&1; then
   log "ERROR" "${RCA_BIN} not found on PATH — run 'npm link' in the codex-rca repo"
+  warn "not on PATH — this commit got NO RCA. Run 'npm link' in the codex-rca repo."
   exit 0
 fi
 
-# Only run if auto_generate is true.
+# Distinguish "config could not be resolved" (a fault) from "auto_generate is
+# off" (a choice). Collapsing these into one message is what hid a multi-day
+# outage: every commit logged the same benign-looking skip line.
+CFG_PATH="$("${RCA_BIN}" config --path 2>/dev/null || true)"
+if [ -z "${CFG_PATH}" ]; then
+  # This hook may be installed globally (core.hooksPath), so it runs in repos
+  # that never used the RCA CLI. Only shout when the repo shows evidence that it
+  # did — otherwise the warning is noise and stops being believed.
+  MAIN_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo .)")"
+  if [ -d "${MAIN_ROOT}/rca" ]; then
+    log "ERROR" "no config resolved from $(pwd) but ${MAIN_ROOT}/rca exists — RCA generation is OFF for this repo"
+    warn "no .claude-rca.json resolved from $(pwd) — this commit got NO RCA. Run '${RCA_BIN} init' or '${RCA_BIN} doctor'."
+  else
+    log "INFO" "skipped: RCA CLI not configured for this repo"
+  fi
+  exit 0
+fi
+
+# Only run if auto_generate is true. This one IS a deliberate choice, so it
+# stays quiet.
 if ! "${RCA_BIN}" config --get auto_generate 2>/dev/null | grep -qx true; then
-  log "INFO" "skipped: auto_generate is not true"
+  log "INFO" "skipped: auto_generate is not true in ${CFG_PATH}"
   exit 0
 fi
 
-log "INFO" "delegating to ${RCA_BIN} generate --if-triggered"
-
-# Run in background so the commit returns immediately. --if-triggered exits
-# quietly (and skipped) when the commit is not one the config asks for.
+log "INFO" "candidate commit, delegating to generate --if-triggered (config: ${CFG_PATH})"
+# Run in background so commit returns immediately. --if-triggered exits quietly
+# when the commit is not one the trigger config asks for.
 (
   GEN_LOG="$("${RCA_BIN}" config --get log.file 2>/dev/null || echo "${LOG_FILE}")"
+  # An unset key must never become a filename literally called "undefined".
+  case "${GEN_LOG}" in
+    undefined | "") GEN_LOG="${LOG_FILE}" ;;
+  esac
   OUTPUT_DIR="$("${RCA_BIN}" config --get output_dir 2>/dev/null || echo rca)"
   if "${RCA_BIN}" generate --from HEAD --if-triggered >>"${GEN_LOG}" 2>&1; then
     log "INFO" "generate --if-triggered finished"

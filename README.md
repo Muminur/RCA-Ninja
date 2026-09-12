@@ -125,11 +125,33 @@ If both providers are configured, generation automatically **falls back** to the
 ## Security & Configuration
 
 - **Secrets live in `.env`, not config.** Put `OBSIDIAN_API_KEY` in a gitignored `.env` beside your `.claude-rca.json`; it is loaded automatically. `config --set obsidian.api_key` is refused, and a plain `config` dump redacts the key.
-- **Secret scanning runs by default.** The diff is scanned for `api_key`/`secret`/`password`/`token` patterns before it is sent to the provider; generation aborts if any are found. Bypass with `generate --no-secret-scan`.
 - **Read-only generation.** The provider is invoked with `allowed_tools: "Read"` (the RCA prompt needs nothing more) and `permission_mode: plan`.
 - **Search is injection-safe.** The search query is bound as a ripgrep pattern with `-e … --`, so a query starting with `-` can never be interpreted as a ripgrep option (notably `--pre`, which would execute a program).
 - **MCP paths are contained.** `rca_show` and `rca_sync_to_vault` confine caller-supplied paths to `output_dir`, since MCP arguments come from a model. The equivalent CLI commands stay unrestricted.
-- **Config is discovered upward.** Running from a subdirectory finds the project's `.claude-rca.json` by walking up to the git repo root, and resolves `output_dir` against the project root. Invalid config fails fast rather than being silently used.
+- **Config is discovered upward.** Running from a subdirectory finds the project's `.claude-rca.json` by walking up to the git repo root — and, from a linked worktree, falls back to the main checkout. `output_dir` resolves against the directory that owns the config. Invalid config fails fast rather than being silently used.
+- **Git short hashes stay strings.** `ref` is emitted quoted (`ref: "a3f2c1d"`), because YAML would otherwise read `0012345` as octal and `123e456` as `Infinity`. Keep it quoted when hand-editing frontmatter.
+
+### Secret scanning and fail-closed behavior
+
+`codex-rca generate` and every auto-generated hook path require a successful
+secret scan before producing an RCA. If the scanner cannot be invoked safely,
+returns malformed output, or reports findings, generation fails closed with:
+
+- `SECRET_SCAN_FAILED`
+- `SECRETS_DETECTED`
+- `SECRET_SCANNER_UNAVAILABLE`
+
+This is intentional and defensive: generation does not continue when scanning
+cannot be trusted. In `--since` batch mode a scanner failure stops that commit,
+and the run reports it rather than writing a partial RCA.
+
+When `auto_generate` is `true`, a failed scanner blocks generation so the hook
+emits a warning and produces no RCA. Set `auto_generate=false` to opt out of
+automatic generation for that repository.
+
+For the Claude provider, generation strips top-level schema metadata (currently
+`$schema`) before passing schema JSON to `--json-schema`, to avoid known
+compatibility issues in some Claude CLI versions.
 
 ## RCA Output
 
@@ -175,6 +197,63 @@ The content includes sections for Summary, Impact, Root Cause, Fix, Prevention, 
 | `codex-rca amend <id> --hint "..."`    | Regenerate an RCA with correction guidance             |
 | `codex-rca mcp-server`                 | Start the MCP server                                   |
 | `codex-rca doctor`                     | Check Node, git, ripgrep, Claude CLI, and RCA state    |
+
+## Git Hooks
+
+```bash
+codex-rca init                          # per repo (also repairs a stale hook)
+node hooks/install-hook.mjs --global    # machine-wide fallback for every other repo
+```
+
+`post-commit` runs in the background on `fix:` commits only — the message is
+checked before anything else, so ordinary commits cost nothing. `commit-msg`
+enforces Conventional Commits.
+
+**A `fix:` commit that produces no RCA is always loud.** The hook writes an
+`ERROR` line to `~/.claude-rca/hook.log` _and_ a warning on stderr, visible in
+your `git commit` output. The one exception is a deliberate
+`auto_generate: false`, which stays quiet. The two cases are distinguished with
+`codex-rca config --path`, which prints the config file actually in use and
+exits 1 when none resolves.
+
+### Worktrees and subdirectories
+
+Git runs hooks with the working directory set to the **root of the working
+tree** — for a linked worktree, that is the worktree, not the main checkout.
+Since `.claude-rca.json` is typically gitignored, it does not exist there.
+Config resolution therefore falls back through:
+
+1. `--config <path>`, if given
+2. an upward walk from the cwd, **bounded at the repo top-level**
+3. the main checkout, via `git rev-parse --git-common-dir`
+
+A relative `output_dir` resolves against the directory of the config that
+declared it, so RCAs generated from a worktree land in the main corpus rather
+than inside the worktree, where they would be lost when it is removed.
+
+### Making the hook unmissable
+
+`.git/hooks/` is not version-controlled, so a fresh clone has no hook and fails
+_silently_. `--global` sets `core.hooksPath` to `~/.git-hooks` if it is not
+already set, then installs `post-commit` there from the same template. Re-run it
+after changing the template — it is idempotent and refreshes a stale copy. Only
+`post-commit` is installed globally; a global `commit-msg` would enforce
+Conventional Commits in every repository on the machine.
+
+The global fallback is safe machine-wide: in a repo with neither a config nor an
+`rca/` directory the hook logs `INFO` and exits without warning, so it never nags
+in projects that do not use the RCA CLI.
+
+To audit any repo in one command, `codex-rca doctor` reports the pipeline itself
+alongside the external tools — which config resolved, whether a `post-commit`
+hook exists at the **effective** hooks directory (honouring `core.hooksPath`),
+and whether `auto_generate` is on:
+
+```text
+config    ok    /path/to/repo/.claude-rca.json
+hook      ok    /path/to/repo/.git/hooks/post-commit
+auto-gen  ok    true — fix: commits generate RCAs automatically
+```
 
 ## Project Layout
 
