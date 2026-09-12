@@ -124,7 +124,8 @@ hooks/                  # Git hooks
 rca/                    # Generated RCA corpus in user projects
 .claudeignore           # Excludes rca/ from incidental Claude Code scans
 test/                   # Unit, integration, and e2e tests
-docs/                   # PRD, architecture, troubleshooting
+examples/               # Sample RCA corpus
+scripts/                # install.sh / install.ps1
 ```
 
 ## Agent Rules

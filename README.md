@@ -228,6 +228,40 @@ cannot outvote the real site of the defect.
 | `codex-rca mcp-server`                 | Start the MCP server                                                                           |
 | `codex-rca doctor`                     | Check Node, git, ripgrep, Claude CLI, and RCA state                                            |
 
+## Exit Codes
+
+Every failure exits with a stable code, so a hook or CI step can branch on it
+instead of parsing text. The message always names the code.
+
+| Exit  | Meaning                                                                             |
+| ----- | ----------------------------------------------------------------------------------- |
+| `0`   | Success.                                                                            |
+| `10`  | `ALREADY_INIT` — the repository is already initialized.                             |
+| `20`  | `NO_DIFF` — the ref has no diff to analyze.                                         |
+| `21`  | `CLAUDE_FAILURE` — the provider ran and exited non-zero.                            |
+| `22`  | `SCHEMA_VALIDATION` — the provider answered, but not against the schema.            |
+| `23`  | `WRITE_CONFLICT` — an RCA already exists for that commit.                           |
+| `24`  | `DISK_ERROR` — a filesystem operation failed.                                       |
+| `25`  | `TOKEN_BUDGET_EXCEEDED` — the payload exceeds `token_budget.hard_limit`.            |
+| `26`  | `SECRETS_DETECTED` — the diff looks like it carries a secret.                       |
+| `30`  | `RIPGREP_MISSING` — `rg` is not on `PATH`.                                          |
+| `31`  | `SECRET_SCANNER_UNAVAILABLE` — no approved scanner; the provider was not called.    |
+| `32`  | `SECRET_SCAN_FAILED` — the scanner itself blocked the run.                          |
+| `33`  | `PROVIDER_ISOLATION_UNAVAILABLE` — the workspace boundary could not be established. |
+| `34`  | `SEARCH_FAILED` — ripgrep or the manifest read failed.                              |
+| `35`  | `PROVIDER_UNAVAILABLE` — every provider is missing, logged out, or rate limited.    |
+| `40`  | `NOT_FOUND` — no RCA matches that ID.                                               |
+| `41`  | `FORBIDDEN_PATH` — the path escapes `output_dir`.                                   |
+| `50`  | `INVALID_CONFIG` / `INVALID_CONFIG_KEY` / `INVALID_CONFIG_VALUE`.                   |
+| `60`  | `NO_VAULT` — Obsidian is enabled with no vault configured.                          |
+| `61`  | `INVALID_VAULT` — the path is not an Obsidian vault.                                |
+| `70`  | `DOCTOR_UNHEALTHY` — at least one `doctor` check failed.                            |
+| `100` | `INTERNAL` — a bug; please file it.                                                 |
+
+Codes in the 30s are environment faults: the command refused to reach the
+provider rather than proceeding unsafely. `35` in particular is the one a
+logged-out machine sees, and it resolves by logging in, not by changing config.
+
 ## Git Hooks
 
 ```bash
