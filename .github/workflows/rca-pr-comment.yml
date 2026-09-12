@@ -49,12 +49,12 @@ jobs:
           script: |
             const body = `## RCA Check
 
-            This PR contains bug-fix changes. After merging, run:
+            This PR looks like it fixes something. If the RCA hooks are installed, pulling the squash merge fires `post-merge` and the RCA is generated against the squash commit. Otherwise run:
             \`\`\`bash
             codex-rca generate
             \`\`\`
 
-            To auto-generate RCAs on every fix commit, enable the post-commit hook:
+            To auto-generate, install the `post-commit` and `post-merge` hooks (`claude-rca init`) and set:
             \`\`\`bash
             codex-rca init
             codex-rca config --set auto_generate=true

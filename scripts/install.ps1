@@ -351,7 +351,7 @@ function Invoke-ObsidianSetup {
 
     claude-rca config --set "obsidian.enabled=true"
     claude-rca config --set "auto_generate=true"
-    Write-OK "Obsidian sync enabled, auto-generate on fix: commits activated"
+    Write-OK "Obsidian sync enabled, auto-generate on triggering commits activated"
 }
 
 # ---------------------------------------------------------------------------
@@ -452,9 +452,11 @@ function Write-Success {
     Write-Host "       claude-rca init          # creates config + installs git hooks"
 
     Write-Host ""
-    Write-Host "  3. That's it! Every fix: commit now auto-generates an RCA."
+    Write-Host "  3. That's it! Every fix: commit now auto-generates an RCA,"
+    Write-Host "     and so does any commit whose body closes an issue (Closes #12)."
     Write-Host "       git commit -m `"fix: your fix message`""
     Write-Host "       # RCA generated in background, synced to Obsidian"
+    Write-Host "       # Pulling a squash merge generates one too, via post-merge"
 
     Write-Host ""
     Write-Host "  Or generate manually:  claude-rca generate"

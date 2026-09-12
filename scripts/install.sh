@@ -365,7 +365,7 @@ setup_obsidian_api() {
 
   claude-rca config --set "obsidian.enabled=true" 2>/dev/null
   claude-rca config --set "auto_generate=true" 2>/dev/null
-  success "Obsidian sync enabled, auto-generate on fix: commits activated"
+  success "Obsidian sync enabled, auto-generate on triggering commits activated"
 }
 
 # ---------------------------------------------------------------------------
@@ -496,9 +496,11 @@ print_success() {
   printf "  2. Initialize claude-rca in your git repo:\n"
   printf "       cd your-project\n"
   printf "       claude-rca init          ${CYAN}# creates config + installs git hooks${RESET}\n\n"
-  printf "  3. That's it! Every ${BOLD}fix:${RESET} commit now auto-generates an RCA.\n"
+  printf "  3. That's it! Every ${BOLD}fix:${RESET} commit now auto-generates an RCA,\n"
+  printf "     and so does any commit whose body closes an issue (${BOLD}Closes #12${RESET}).\n"
   printf "       git commit -m \"fix: your fix message\"\n"
-  printf "       ${CYAN}# → RCA generated in background, synced to Obsidian${RESET}\n\n"
+  printf "       ${CYAN}# → RCA generated in background, synced to Obsidian${RESET}\n"
+  printf "       ${CYAN}# → pulling a squash merge generates one too, via post-merge${RESET}\n\n"
   printf "  Or generate manually:  claude-rca generate\n"
   printf "  Search your corpus:    claude-rca search \"null pointer\"\n"
   printf "  Start MCP server:      claude-rca mcp-server\n"

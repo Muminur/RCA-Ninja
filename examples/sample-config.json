@@ -1,6 +1,10 @@
 {
   "version": 1,
   "output_dir": "./rca",
+  "triggers": {
+    "commit_types": ["fix"],
+    "closes_issue": true
+  },
   "claude": {
     "use_bare": true,
     "permission_mode": "plan",
